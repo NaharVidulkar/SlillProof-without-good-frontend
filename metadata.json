@@ -1,0 +1,6 @@
+{
+  "name": "SkillProof",
+  "description": "Evidence-based skill verification platform. Don't just claim a skill. Prove it.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

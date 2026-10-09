@@ -165,8 +165,20 @@ export const clientApi = {
     });
   },
 
-  getAttempt: async (attemptId: string): Promise<AssessmentAttempt> => {
-    return fetchJson<AssessmentAttempt>(`/api/attempts/${attemptId}`);
+  getAttempt: async (attemptId: string): Promise<AssessmentAttempt & {
+    remainingSeconds?: number;
+    questions?: any[];
+    sectionsDetailed?: any[];
+    assessmentTitle?: string;
+    timeLimitMinutes?: number;
+  }> => {
+    return fetchJson<AssessmentAttempt & {
+      remainingSeconds?: number;
+      questions?: any[];
+      sectionsDetailed?: any[];
+      assessmentTitle?: string;
+      timeLimitMinutes?: number;
+    }>(`/api/attempts/${attemptId}`);
   },
 
   saveAnswer: async (

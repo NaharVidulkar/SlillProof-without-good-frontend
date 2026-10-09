@@ -39,16 +39,33 @@ const ReviewResponseSchema = z.object({
 });
 
 export interface ReviewSubmissionParams {
-  problem: Problem;
+  problem?: Problem;
+  problemTitle?: string;
+  problemDescription?: string;
   language: SupportedLanguage;
   code: string;
-  deterministic: DeterministicResult;
+  deterministic?: DeterministicResult;
+  deterministicResult?: DeterministicResult;
 }
 
 export async function reviewSubmission(
   params: ReviewSubmissionParams
 ): Promise<AIReview> {
-  const { problem, language, code, deterministic } = params;
+  const { language, code } = params;
+  const deterministic = params.deterministic || params.deterministicResult || {
+    compiled: true,
+    visiblePassed: 0,
+    visibleTotal: 0,
+    hiddenPassed: 0,
+    hiddenTotal: 0,
+    maxTimeMs: 0,
+    maxMemoryKb: 0,
+    correctness: 0,
+  };
+  const problemTitle = params.problem?.title || params.problemTitle || 'Coding Challenge';
+  const problemDifficulty = params.problem?.difficulty || 'Medium';
+  const problemDescription = params.problem?.description || params.problemDescription || '';
+  const problemSkills = params.problem?.skills || [];
 
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
@@ -64,10 +81,10 @@ Every strength and weakness MUST cite 1-based line numbers from the student code
 Detect if the student attempted to hard-code output values or cheat.
 Output ONLY valid JSON adhering strictly to the requested schema.`;
 
-  const prompt = `Problem: ${problem.title}
-Difficulty: ${problem.difficulty}
+  const prompt = `Problem: ${problemTitle}
+Difficulty: ${problemDifficulty}
 Description:
-${problem.description}
+${problemDescription}
 
 Execution Summary:
 - Compiled: ${deterministic.compiled}
@@ -134,7 +151,17 @@ function generateFallbackReview(
   params: ReviewSubmissionParams,
   note: string
 ): AIReview {
-  const { deterministic, problem } = params;
+  const deterministic = params.deterministic || params.deterministicResult || {
+    compiled: true,
+    visiblePassed: 0,
+    visibleTotal: 0,
+    hiddenPassed: 0,
+    hiddenTotal: 0,
+    maxTimeMs: 0,
+    maxMemoryKb: 0,
+    correctness: 0,
+  };
+  const skills = params.problem?.skills || [];
   const base = Math.min(deterministic.correctness, 80);
 
   return {
@@ -158,7 +185,7 @@ function generateFallbackReview(
       'Ensure all edge cases and boundary conditions are handled cleanly.',
       'Refactor repeated logic into reusable helper functions.',
     ],
-    detectedSkills: problem.skills,
+    detectedSkills: skills,
     opinion: {
       verdict: deterministic.correctness >= 70 ? 'likely_correct' : 'likely_incorrect',
       confidence: 0.8,

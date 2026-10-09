@@ -28,6 +28,7 @@ import {
   buildPassportProfile,
 } from './lib/server/passport.ts';
 import {
+  DeterministicResult,
   EvidenceItem,
   HiddenTestResult,
   QuizAttempt,
@@ -50,9 +51,9 @@ import {
 } from './lib/server/assessments/types.ts';
 import { checkLiteralHardcoding } from './lib/domain/combiner.ts';
 
-// Load both .env.local (preferred for local secrets) and standard .env
-dotenv.config({ path: '.env.local' });
-dotenv.config();
+// Load both .env.local (preferred for local secrets) and standard .env with override enabled
+dotenv.config({ path: '.env.local', override: true });
+dotenv.config({ override: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -727,9 +728,9 @@ async function startServer() {
       }
 
       const attempts = await store.list<AssessmentAttempt>('assessment_attempts');
-      const existing = attempts.find(
-        (a) => a.userId === DEMO_USER_ID && a.assessmentId === req.params.id && a.status === 'in_progress'
-      );
+      const userAttempts = attempts.filter((a) => a.userId === DEMO_USER_ID && a.assessmentId === assessment.id);
+
+      const existing = userAttempts.find((a) => a.status === 'in_progress');
 
       if (existing) {
         const remaining = Math.max(0, Math.round((new Date(existing.deadlineAt).getTime() - Date.now()) / 1000));
@@ -742,6 +743,31 @@ async function startServer() {
             inProgress: true,
           });
           return;
+        } else {
+          // Expired attempt must not be returned as in progress
+          existing.status = 'expired';
+          await store.put('assessment_attempts', existing.id, existing);
+        }
+      }
+
+      // Check cooldown logic (must never block user's first attempt)
+      const cooldownMinutes = parseInt(process.env.ASSESSMENT_COOLDOWN_MINUTES || '0', 10);
+      if (cooldownMinutes > 0) {
+        const completedAttempts = userAttempts
+          .filter((a) => a.status === 'completed' && a.completedAt)
+          .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime());
+
+        if (completedAttempts.length > 0) {
+          const lastCompleted = completedAttempts[0];
+          const elapsedMinutes = (Date.now() - new Date(lastCompleted.completedAt!).getTime()) / (1000 * 60);
+          if (elapsedMinutes < cooldownMinutes) {
+            const waitMinutes = Math.ceil(cooldownMinutes - elapsedMinutes);
+            res.status(429).json({
+              error: `Retake cooldown in effect. Please wait ${waitMinutes} minute(s) before starting a new attempt.`,
+              cooldownRemainingMinutes: waitMinutes,
+            });
+            return;
+          }
         }
       }
 
@@ -803,9 +829,36 @@ async function startServer() {
       }
 
       const remaining = Math.max(0, Math.round((new Date(attempt.deadlineAt).getTime() - Date.now()) / 1000));
+      if (remaining === 0 && attempt.status === 'in_progress') {
+        attempt.status = 'expired';
+        await store.put('assessment_attempts', attempt.id, attempt);
+      }
+
+      const assessment = getAssessmentById(attempt.assessmentId);
+      const publicDetail = getPublicAssessmentDetail(attempt.assessmentId);
+
+      // Build 25 sanitized questions in order (5 easy, 10 medium, 10 hard) without answers or hidden tests
+      const questions: any[] = [];
+      if (publicDetail) {
+        for (const sec of publicDetail.sectionsDetailed) {
+          for (const q of sec.questions || []) {
+            questions.push({
+              ...q,
+              sectionId: sec.id,
+              sectionTitle: sec.title,
+              difficultyLabel: sec.difficultyLabel,
+            });
+          }
+        }
+      }
+
       res.json({
         ...attempt,
+        assessmentTitle: assessment?.title || 'Python',
+        timeLimitMinutes: assessment?.timeLimitMinutes || 180,
         remainingSeconds: remaining,
+        sectionsDetailed: publicDetail ? publicDetail.sectionsDetailed : [],
+        questions,
       });
     } catch (err: unknown) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to get attempt' });

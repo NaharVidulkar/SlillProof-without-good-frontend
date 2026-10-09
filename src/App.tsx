@@ -4,37 +4,75 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { AppShell } from './components/layout/AppShell.tsx';
+import { NavTabId } from './components/layout/Sidebar.tsx';
+import { DashboardView } from './components/DashboardView.tsx';
 import { AssessmentView } from './components/AssessmentView.tsx';
 import { SkillsView } from './components/SkillsView.tsx';
-import { DashboardView } from './components/DashboardView.tsx';
 import { JobMatchView } from './components/JobMatchView.tsx';
 import { PassportView } from './components/PassportView.tsx';
-
-type NavTab = 'dashboard' | 'assessments' | 'skills' | 'job-match' | 'passport';
+import { ProfileView } from './components/ProfileView.tsx';
+import { HelpView } from './components/HelpView.tsx';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<NavTabId>('dashboard');
+  const [isAttemptMode, setIsAttemptMode] = useState<boolean>(false);
+  const [dashboardRightPanel, setDashboardRightPanel] = useState<React.ReactNode>(null);
+  const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
+  const [currentAssessmentId, setCurrentAssessmentId] = useState<string>('python-fundamentals');
+  const [currentSubView, setCurrentSubView] = useState<'list' | 'detail' | 'attempt' | undefined>(undefined);
 
-  // Handle URL hash or path initialization and redirect /challenges to /assessments
+  // Synchronize browser history / URL path
   useEffect(() => {
     const handleUrlSync = () => {
-      const path = window.location.pathname.toLowerCase();
+      const pathname = window.location.pathname;
+      const path = pathname.toLowerCase();
       const hash = window.location.hash.toLowerCase().replace('#', '');
 
       if (path.includes('challenges') || hash.includes('challenges')) {
         setActiveTab('assessments');
+        setCurrentAttemptId(null);
+        setCurrentSubView('list');
         window.history.replaceState(null, '', '/assessments');
+        return;
+      }
+
+      // Check for deep attempt link e.g. /assessments/python-fundamentals/attempt/att_xxx or /attempts/att_xxx
+      const attemptMatch = pathname.match(/(?:assessments\/([^/]+)\/attempt|attempts)\/([^/?#]+)/i);
+      if (attemptMatch) {
+        setActiveTab('assessments');
+        if (attemptMatch[1]) {
+          setCurrentAssessmentId(attemptMatch[1]);
+        }
+        setCurrentAttemptId(attemptMatch[2]);
+        setCurrentSubView('attempt');
+        return;
+      }
+
+      // Check for assessment detail e.g. /assessments/python-fundamentals
+      const assessmentDetailMatch = pathname.match(/^\/assessments\/([^/?#]+)$/i);
+      if (assessmentDetailMatch && assessmentDetailMatch[1] && assessmentDetailMatch[1] !== 'attempt') {
+        setActiveTab('assessments');
+        setCurrentAssessmentId(assessmentDetailMatch[1]);
+        setCurrentAttemptId(null);
+        setCurrentSubView('detail');
         return;
       }
 
       if (path.includes('assessments') || hash.includes('assessments') || path.includes('assessment')) {
         setActiveTab('assessments');
+        setCurrentAttemptId(null);
+        setCurrentSubView('list');
       } else if (path.includes('skills') || hash.includes('skills')) {
         setActiveTab('skills');
       } else if (path.includes('job-match') || hash.includes('job-match')) {
         setActiveTab('job-match');
       } else if (path.includes('passport') || hash.includes('passport')) {
         setActiveTab('passport');
+      } else if (path.includes('profile') || hash.includes('profile')) {
+        setActiveTab('profile');
+      } else if (path.includes('help') || hash.includes('help')) {
+        setActiveTab('help');
       } else if (path.includes('dashboard') || hash.includes('dashboard')) {
         setActiveTab('dashboard');
       }
@@ -45,80 +83,77 @@ export default function App() {
     return () => window.removeEventListener('popstate', handleUrlSync);
   }, []);
 
-  const handleTabChange = (tab: NavTab) => {
+  const handleTabChange = (tab: NavTabId) => {
     setActiveTab(tab);
     window.history.pushState(null, '', `/${tab}`);
+    // If navigating away from assessments, ensure attempt mode is exited
+    if (tab !== 'assessments') {
+      setIsAttemptMode(false);
+      setCurrentAttemptId(null);
+    }
   };
 
-  const navItems: Array<{ id: NavTab; label: string }> = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'assessments', label: 'Assessments' },
-    { id: 'skills', label: 'Skills' },
-    { id: 'job-match', label: 'Job Match' },
-    { id: 'passport', label: 'Passport' },
-  ];
-
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
-      {/* 3-Zone Top Navigation Bar */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-[1200px] w-full mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          {/* Zone 1: Single Brand Wordmark */}
-          <button
-            onClick={() => handleTabChange('dashboard')}
-            className="text-lg font-bold tracking-tight text-slate-900 hover:text-slate-700 transition-colors cursor-pointer"
-          >
-            SkillProof
-          </button>
+    <AppShell
+      activeTab={activeTab}
+      onTabChange={handleTabChange}
+      rightPanel={activeTab === 'dashboard' ? dashboardRightPanel : undefined}
+      isAttemptMode={isAttemptMode}
+    >
+      {activeTab === 'dashboard' && (
+        <DashboardView
+          onNavigateToAssessments={() => handleTabChange('assessments')}
+          onNavigateToSkills={() => handleTabChange('skills')}
+          onNavigateToProfile={() => handleTabChange('profile')}
+          onOpenAttempt={(attId) => {
+            setCurrentAttemptId(attId);
+            setCurrentSubView('attempt');
+            setActiveTab('assessments');
+            window.history.pushState(null, '', `/assessments/${currentAssessmentId}/attempt/${attId}`);
+          }}
+          onUpdateRightPanel={setDashboardRightPanel}
+        />
+      )}
 
-          {/* Zone 2: Navigation Links */}
-          <nav className="flex items-center space-x-1 sm:space-x-2 overflow-x-auto py-1">
-            {navItems.map((item) => {
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleTabChange(item.id)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                    isActive
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
+      {activeTab === 'assessments' && (
+        <AssessmentView
+          key={currentAttemptId ? `attempt-${currentAttemptId}` : 'assessments-root'}
+          initialAttemptId={currentAttemptId}
+          initialAssessmentId={currentAssessmentId}
+          initialSubView={currentSubView}
+          onNavigateToPassport={() => handleTabChange('passport')}
+          onAttemptModeChange={setIsAttemptMode}
+        />
+      )}
 
-          {/* Zone 3: User indicator */}
-          <div className="flex items-center space-x-2 text-xs text-slate-500">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-            <span className="font-mono text-slate-700 font-medium hidden sm:inline">demo-user</span>
-          </div>
-        </div>
-      </header>
+      {activeTab === 'skills' && (
+        <SkillsView
+          onNavigateToAssessments={() => handleTabChange('assessments')}
+        />
+      )}
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-6 py-8">
-        {activeTab === 'dashboard' && (
-          <DashboardView onNavigateToAssessments={() => handleTabChange('assessments')} />
-        )}
+      {activeTab === 'job-match' && (
+        <JobMatchView
+          onNavigateToAssessments={() => handleTabChange('assessments')}
+        />
+      )}
 
-        {activeTab === 'assessments' && (
-          <AssessmentView onNavigateToPassport={() => handleTabChange('passport')} />
-        )}
+      {activeTab === 'passport' && (
+        <PassportView />
+      )}
 
-        {activeTab === 'skills' && (
-          <SkillsView onNavigateToAssessments={() => handleTabChange('assessments')} />
-        )}
+      {activeTab === 'profile' && (
+        <ProfileView
+          onSignOut={() => {
+            handleTabChange('dashboard');
+            window.location.reload();
+          }}
+        />
+      )}
 
-        {activeTab === 'job-match' && (
-          <JobMatchView onNavigateToAssessments={() => handleTabChange('assessments')} />
-        )}
-
-        {activeTab === 'passport' && <PassportView />}
-      </main>
-    </div>
+      {activeTab === 'help' && (
+        <HelpView />
+      )}
+    </AppShell>
   );
 }

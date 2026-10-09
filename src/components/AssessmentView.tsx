@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AssessmentsList } from './assessments/AssessmentsList.tsx';
 import { AssessmentDetail } from './assessments/AssessmentDetail.tsx';
 import { AssessmentAttemptView } from './assessments/AssessmentAttemptView.tsx';
@@ -13,26 +13,57 @@ import { AssessmentResult } from '../../lib/server/assessments/types.ts';
 interface AssessmentViewProps {
   onComplete?: () => void;
   onNavigateToPassport?: () => void;
+  onAttemptModeChange?: (inAttempt: boolean) => void;
+  initialAttemptId?: string | null;
+  initialAssessmentId?: string;
+  initialSubView?: 'list' | 'detail' | 'attempt';
 }
 
 export const AssessmentView: React.FC<AssessmentViewProps> = ({
   onComplete,
   onNavigateToPassport,
+  onAttemptModeChange,
+  initialAttemptId = null,
+  initialAssessmentId = 'python-fundamentals',
+  initialSubView,
 }) => {
   // Navigation states: 'list' | 'detail' | 'attempt' | 'result'
-  const [subView, setSubView] = useState<'list' | 'detail' | 'attempt' | 'result'>('list');
-  const [selectedAssessmentId, setSelectedAssessmentId] = useState<string>('python-fundamentals');
-  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
+  const [subView, setSubView] = useState<'list' | 'detail' | 'attempt' | 'result'>(
+    initialAttemptId ? 'attempt' : (initialSubView || 'list')
+  );
+  const [selectedAssessmentId, setSelectedAssessmentId] = useState<string>(initialAssessmentId);
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(initialAttemptId);
+  const [targetQuestionIndex, setTargetQuestionIndex] = useState<number>(0);
   const [completedResult, setCompletedResult] = useState<AssessmentResult | null>(null);
+
+  useEffect(() => {
+    if (initialAttemptId) {
+      setActiveAttemptId(initialAttemptId);
+      setSubView('attempt');
+    }
+  }, [initialAttemptId]);
+
+  useEffect(() => {
+    if (initialAssessmentId) {
+      setSelectedAssessmentId(initialAssessmentId);
+    }
+  }, [initialAssessmentId]);
+
+  React.useEffect(() => {
+    onAttemptModeChange?.(subView === 'attempt');
+  }, [subView, onAttemptModeChange]);
 
   const handleSelectAssessment = (id: string) => {
     setSelectedAssessmentId(id);
     setSubView('detail');
+    window.history.pushState(null, '', `/assessments/${id}`);
   };
 
-  const handleStartAttempt = (attemptId: string) => {
+  const handleStartAttempt = (attemptId: string, questionIndex = 0) => {
     setActiveAttemptId(attemptId);
+    setTargetQuestionIndex(questionIndex);
     setSubView('attempt');
+    window.history.pushState(null, '', `/assessments/${selectedAssessmentId}/attempt/${attemptId}`);
   };
 
   const handleFinishAttempt = (result: AssessmentResult) => {
@@ -45,6 +76,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
     setSubView('list');
     setActiveAttemptId(null);
     setCompletedResult(null);
+    window.history.pushState(null, '', '/assessments');
   };
 
   return (
@@ -64,6 +96,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
       {subView === 'attempt' && activeAttemptId && (
         <AssessmentAttemptView
           attemptId={activeAttemptId}
+          initialQuestionIndex={targetQuestionIndex}
           onFinish={handleFinishAttempt}
           onExit={handleBackToList}
         />

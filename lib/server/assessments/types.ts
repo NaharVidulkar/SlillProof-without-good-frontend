@@ -103,6 +103,8 @@ export interface PublicAssessmentSummary {
 
 export interface PublicAssessmentDetail extends PublicAssessmentSummary {
   sectionsDetailed: PublicSection[];
+  inProgressAttemptId?: string;
+  remainingSeconds?: number;
 }
 
 export interface AssessmentAttempt {
@@ -112,6 +114,7 @@ export interface AssessmentAttempt {
   status: 'in_progress' | 'completed' | 'expired';
   startedAt: string;
   deadlineAt: string;
+  remainingSeconds?: number;
   completedAt?: string;
   answers: Record<string, { choiceId?: string; code?: string; flagged?: boolean; updatedAt?: string }>;
   submissionsCountByQid: Record<string, number>;

@@ -28,7 +28,8 @@ export function getAllAssessments(): Assessment[] {
 }
 
 export function getAssessmentById(id: string): Assessment | undefined {
-  return ASSESSMENTS.find((a) => a.id === id);
+  const normId = id === 'python' ? 'python-fundamentals' : id;
+  return ASSESSMENTS.find((a) => a.id === normId);
 }
 
 export function getPublicAssessmentSummaries(
@@ -77,7 +78,8 @@ export function getPublicAssessmentSummaries(
 }
 
 export function getPublicAssessmentDetail(id: string): PublicAssessmentDetail | null {
-  const assessment = getAssessmentById(id);
+  const normId = id === 'python' ? 'python-fundamentals' : id;
+  const assessment = getAssessmentById(normId);
   if (!assessment) return null;
 
   let totalQuestions = 0;

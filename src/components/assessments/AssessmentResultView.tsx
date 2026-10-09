@@ -19,7 +19,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react';
-import { AssessmentResult, QuestionReviewItem } from '../../lib/server/assessments/types.ts';
+import { AssessmentResult, QuestionReviewItem } from '../../../lib/server/assessments/types.ts';
 import { Button, Card, Chip, PageHeader } from '../ui/index.tsx';
 
 interface AssessmentResultViewProps {

@@ -38,7 +38,7 @@ export const Button: React.FC<{
   children: React.ReactNode;
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   size?: 'sm' | 'md' | 'lg';
-  onClick?: () => void;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   type?: 'button' | 'submit' | 'reset';
   className?: string;
@@ -143,3 +143,15 @@ export const Modal: React.FC<{
     </div>
   );
 };
+
+export * from './LevelBadge.tsx';
+export * from './ConfidenceRing.tsx';
+export * from './TierChip.tsx';
+export * from './Banner.tsx';
+export * from './GradientCard.tsx';
+export * from './DataTable.tsx';
+export * from './ProfileCard.tsx';
+export * from './BadgeCard.tsx';
+export * from './MiniCalendar.tsx';
+export * from './ReminderList.tsx';
+

@@ -260,7 +260,7 @@ Returns a security-safe boolean map indicating whether required environment vari
 **Response (200 OK):** `PublicAssessmentDetail & { inProgressAttemptId?: string, remainingSeconds?: number }`
 
 ### `POST /api/assessments/:id/start`
-**Description:** Starts a new 180-minute attempt or resumes an existing in-progress attempt. Initializes question starter drafts.
+**Description:** Starts a new 180-minute attempt or resumes an existing active in-progress attempt. Accepts `python-fundamentals` or `python` alias. If an in-progress attempt exists with remaining time, returns the same `attemptId` (`inProgress: true`). Expired attempts are marked expired and not resumed. Enforces `ASSESSMENT_COOLDOWN_MINUTES` on completed retakes (never blocking a first attempt).
 **Response (200 OK):**
 ```json
 {
@@ -273,8 +273,28 @@ Returns a security-safe boolean map indicating whether required environment vari
 ```
 
 ### `GET /api/attempts/:attemptId`
-**Description:** Returns current attempt state, saved answers, submission counts, and remaining time.
-**Response (200 OK):** `AssessmentAttempt & { remainingSeconds: number }`
+**Description:** Returns current attempt state, saved answers, submission counts, remaining time, and all 25 sanitized questions in order (5 easy, 10 medium, 10 hard) without answers or hidden tests.
+**Response (200 OK):**
+```json
+{
+  "id": "att_1712345678_ab12",
+  "userId": "demo-user",
+  "assessmentId": "python-fundamentals",
+  "status": "in_progress",
+  "startedAt": "2026-10-08T12:00:00Z",
+  "deadlineAt": "2026-10-08T15:00:00Z",
+  "remainingSeconds": 10800,
+  "answers": {},
+  "submissionsCountByQid": {},
+  "integrity": { "tabSwitches": 0, "largePastes": 0, "flagged": false },
+  "assessmentTitle": "Python",
+  "timeLimitMinutes": 180,
+  "questions": [
+    { "id": "a1-types-operators", "type": "mcq", "prompt": "...", "sectionId": "A", "difficultyLabel": "Easy" }
+  ],
+  "sectionsDetailed": [...]
+}
+```
 
 ### `PUT /api/attempts/:attemptId/answer`
 **Description:** Debounced autosave endpoint for MCQ choice selections or coding drafts.

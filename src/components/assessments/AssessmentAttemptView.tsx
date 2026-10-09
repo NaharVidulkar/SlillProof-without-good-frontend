@@ -42,12 +42,14 @@ interface AssessmentAttemptViewProps {
   attemptId: string;
   onFinish: (result: AssessmentResult) => void;
   onExit: () => void;
+  initialQuestionIndex?: number;
 }
 
 export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
   attemptId,
   onFinish,
   onExit,
+  initialQuestionIndex = 0,
 }) => {
   const [attempt, setAttempt] = useState<AssessmentAttempt | null>(null);
   const [detail, setDetail] = useState<PublicAssessmentDetail | null>(null);
@@ -55,7 +57,7 @@ export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   // Active question index: 0 to 24
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [currentIndex, setCurrentIndex] = useState<number>(initialQuestionIndex);
 
   // Flat list of 25 questions with their section metadata
   const [flatQuestions, setFlatQuestions] = useState<
@@ -111,10 +113,7 @@ export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
       setAnswers(att.answers || {});
       setRemainingSeconds(att.remainingSeconds ?? 10800);
 
-      const det = await clientApi.getAssessmentDetail(att.assessmentId);
-      setDetail(det);
-
-      // Flatten 25 questions in order
+      // Extract 25 questions directly from getAttempt response
       const flat: Array<{
         question: PublicAssessmentQuestion;
         sectionId: 'A' | 'B' | 'C';
@@ -123,20 +122,56 @@ export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
         qNumber: number;
       }> = [];
 
-      let qCount = 0;
-      for (const sec of det.sectionsDetailed) {
-        for (const q of sec.questions || []) {
-          qCount++;
+      if (att.questions && att.questions.length > 0) {
+        att.questions.forEach((q: any, idx: number) => {
           flat.push({
             question: q,
-            sectionId: sec.id,
-            sectionTitle: sec.title,
-            difficultyLabel: sec.difficultyLabel,
-            qNumber: qCount,
+            sectionId: q.sectionId || (idx < 5 ? 'A' : idx < 15 ? 'B' : 'C'),
+            sectionTitle:
+              q.sectionTitle ||
+              (idx < 5
+                ? 'Section A: Easy'
+                : idx < 15
+                ? 'Section B: Medium'
+                : 'Section C: Hard'),
+            difficultyLabel:
+              q.difficultyLabel || (idx < 5 ? 'Easy' : idx < 15 ? 'Medium' : 'Hard'),
+            qNumber: idx + 1,
           });
+        });
+        setFlatQuestions(flat);
+        setDetail({
+          id: att.assessmentId,
+          title: att.assessmentTitle || 'Python',
+          domain: 'Python Engineering & System Architecture',
+          description:
+            'Evidence-based verification of core Python internals, data structures, algorithms, and real-life systems.',
+          timeLimitMinutes: att.timeLimitMinutes || 180,
+          totalQuestions: att.questions.length,
+          totalMcq: 11,
+          totalCode: 14,
+          sections: [],
+          sectionsDetailed: att.sectionsDetailed || [],
+        });
+      } else {
+        const det = await clientApi.getAssessmentDetail(att.assessmentId);
+        setDetail(det);
+
+        let qCount = 0;
+        for (const sec of det.sectionsDetailed) {
+          for (const q of sec.questions || []) {
+            qCount++;
+            flat.push({
+              question: q,
+              sectionId: sec.id,
+              sectionTitle: sec.title,
+              difficultyLabel: sec.difficultyLabel,
+              qNumber: qCount,
+            });
+          }
         }
+        setFlatQuestions(flat);
       }
-      setFlatQuestions(flat);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load assessment attempt');
     } finally {
@@ -325,9 +360,94 @@ export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
 
   if (loading) {
     return (
-      <div className="bg-white border border-slate-200 rounded-xl p-16 flex flex-col items-center justify-center space-y-3">
-        <RefreshCw className="w-6 h-6 animate-spin text-slate-600" />
-        <span className="text-sm text-slate-500">Loading assessment workspace...</span>
+      <div className="space-y-4 -mt-2 animate-pulse">
+        {/* Top Bar Skeleton */}
+        <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center space-x-3">
+            <div className="h-5 w-32 bg-slate-200 rounded-md" />
+            <span className="text-slate-300">|</span>
+            <div className="h-4 w-28 bg-slate-200 rounded-md" />
+            <div className="h-5 w-14 bg-slate-200 rounded-full" />
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="h-4 w-4 bg-slate-200 rounded-full" />
+            <div className="h-5 w-20 bg-slate-200 rounded-md font-mono" />
+          </div>
+          <div className="flex items-center space-x-3">
+            <div className="h-4 w-12 bg-slate-200 rounded-md" />
+            <div className="h-8 w-20 bg-slate-200 rounded-lg" />
+            <div className="h-8 w-32 bg-slate-200 rounded-lg" />
+          </div>
+        </div>
+
+        {/* 2-Column Main Workspace Skeleton */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Palette Skeleton */}
+          <div className="lg:col-span-3 space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <div className="h-4 w-28 bg-slate-200 rounded-md" />
+                <div className="h-3 w-16 bg-slate-100 rounded-md" />
+              </div>
+
+              {/* Section A Skeleton */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="h-3.5 w-24 bg-slate-200 rounded-md" />
+                  <div className="h-3 w-12 bg-slate-100 rounded-md" />
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={`skel-a-${i}`} className="h-8 rounded bg-slate-100" />
+                  ))}
+                </div>
+              </div>
+
+              {/* Section B Skeleton */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div className="h-3.5 w-28 bg-slate-200 rounded-md" />
+                  <div className="h-3 w-16 bg-slate-100 rounded-md" />
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {Array.from({ length: 10 }).map((_, i) => (
+                    <div key={`skel-b-${i}`} className="h-8 rounded bg-slate-100" />
+                  ))}
+                </div>
+              </div>
+
+              {/* Section C Skeleton */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div className="h-3.5 w-24 bg-slate-200 rounded-md" />
+                  <div className="h-3 w-14 bg-slate-100 rounded-md" />
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {Array.from({ length: 10 }).map((_, i) => (
+                    <div key={`skel-c-${i}`} className="h-8 rounded bg-slate-100" />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Question Area Skeleton */}
+          <div className="lg:col-span-9 space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+              <div className="space-y-2">
+                <div className="h-6 w-3/4 bg-slate-200 rounded-md" />
+                <div className="h-4 w-full bg-slate-100 rounded-md" />
+                <div className="h-4 w-5/6 bg-slate-100 rounded-md" />
+              </div>
+              <div className="space-y-3 pt-4 border-t border-slate-100">
+                <div className="h-12 w-full bg-slate-100 rounded-xl" />
+                <div className="h-12 w-full bg-slate-100 rounded-xl" />
+                <div className="h-12 w-full bg-slate-100 rounded-xl" />
+                <div className="h-12 w-full bg-slate-100 rounded-xl" />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

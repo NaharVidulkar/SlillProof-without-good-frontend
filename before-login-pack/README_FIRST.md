@@ -1,0 +1,1 @@
+Start with MANIFEST_VITE.md (the project is React + Vite + Express). Edits E3, E4 and E5 are defined in MANIFEST_NEXT.md and still apply. MANIFEST_NEXT.md is kept only for that reason and for a possible future Next.js setup. Verify the copies with CHECKSUMS.txt (sha256sum -c) BEFORE editing anything.

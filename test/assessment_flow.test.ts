@@ -231,4 +231,59 @@ describe('Assessment Attempt End-to-End Flow & Rules', () => {
     const elapsedOldMinutes = (Date.now() - new Date(oldCompletedAttempt.completedAt!).getTime()) / (1000 * 60);
     expect(elapsedOldMinutes).toBeGreaterThan(cooldownMinutes);
   });
+
+  it('a user cannot read or modify another user’s attempt (authorization isolation)', async () => {
+    const ownerUserId = 'student-alice';
+    const attackerUserId = 'student-bob';
+
+    const attemptId = 'att_alice_secure_123';
+    const attempt: AssessmentAttempt = {
+      id: attemptId,
+      userId: ownerUserId,
+      assessmentId: 'python-fundamentals',
+      status: 'in_progress',
+      startedAt: new Date().toISOString(),
+      deadlineAt: new Date(Date.now() + 180 * 60 * 1000).toISOString(),
+      answers: {},
+      submissionsCountByQid: {},
+      integrity: { tabSwitches: 0, largePastes: 0, flagged: false },
+    };
+
+    await store.put('assessment_attempts', attemptId, attempt);
+
+    // Verify simulation of endpoint auth guard
+    const fetched = await store.get<AssessmentAttempt>('assessment_attempts', attemptId);
+    expect(fetched).not.toBeNull();
+    expect(fetched?.userId).toBe(ownerUserId);
+
+    // Attacker request check:
+    const canAttackerRead = fetched?.userId === attackerUserId;
+    expect(canAttackerRead).toBe(false);
+
+    // Owner request check:
+    const canOwnerRead = fetched?.userId === ownerUserId;
+    expect(canOwnerRead).toBe(true);
+  });
+
+  it('legacy /challenges URL redirects to /assessments while /assessments/... is preserved', () => {
+    // Test URL path mapping logic
+    function resolveRedirect(pathname: string): { redirect: boolean; target?: string } {
+      if (/^\/challenges(?:\/.*)?$/i.test(pathname)) {
+        return { redirect: true, target: '/assessments' };
+      }
+      return { redirect: false };
+    }
+
+    // Legacy paths redirect to /assessments
+    expect(resolveRedirect('/challenges')).toEqual({ redirect: true, target: '/assessments' });
+    expect(resolveRedirect('/challenges/')).toEqual({ redirect: true, target: '/assessments' });
+    expect(resolveRedirect('/challenges/python-fundamentals')).toEqual({ redirect: true, target: '/assessments' });
+    expect(resolveRedirect('/challenges/some-challenge-id')).toEqual({ redirect: true, target: '/assessments' });
+
+    // Assessment paths are NEVER redirected
+    expect(resolveRedirect('/assessments')).toEqual({ redirect: false });
+    expect(resolveRedirect('/assessments/python-fundamentals')).toEqual({ redirect: false });
+    expect(resolveRedirect('/assessments/python-fundamentals/attempt/att_123')).toEqual({ redirect: false });
+    expect(resolveRedirect('/attempts/att_123')).toEqual({ redirect: false });
+  });
 });

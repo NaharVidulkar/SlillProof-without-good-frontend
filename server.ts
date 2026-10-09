@@ -64,6 +64,11 @@ async function startServer() {
 
   app.use(express.json({ limit: '500kb' }));
 
+  // Redirect legacy /challenges paths to /assessments
+  app.get('/challenges*', (req, res) => {
+    res.redirect(301, '/assessments');
+  });
+
   // Helper to get evaluated skills for the current user
   async function getUserEvaluatedSkills(userId: string) {
     const evidenceList = await store.list<EvidenceItem>('skill_evidence');
@@ -727,8 +732,9 @@ async function startServer() {
         return;
       }
 
+      const userId = (req.headers['x-user-id'] as string) || DEMO_USER_ID;
       const attempts = await store.list<AssessmentAttempt>('assessment_attempts');
-      const userAttempts = attempts.filter((a) => a.userId === DEMO_USER_ID && a.assessmentId === assessment.id);
+      const userAttempts = attempts.filter((a) => a.userId === userId && a.assessmentId === assessment.id);
 
       const existing = userAttempts.find((a) => a.status === 'in_progress');
 
@@ -792,7 +798,7 @@ async function startServer() {
 
       const newAttempt: AssessmentAttempt = {
         id: attemptId,
-        userId: DEMO_USER_ID,
+        userId,
         assessmentId: assessment.id,
         status: 'in_progress',
         startedAt: now.toISOString(),
@@ -825,6 +831,12 @@ async function startServer() {
       const attempt = await store.get<AssessmentAttempt>('assessment_attempts', req.params.attemptId);
       if (!attempt) {
         res.status(404).json({ error: 'Assessment attempt not found' });
+        return;
+      }
+
+      const requesterId = (req.headers['x-user-id'] as string) || DEMO_USER_ID;
+      if (attempt.userId && requesterId && attempt.userId !== requesterId) {
+        res.status(403).json({ error: "Forbidden: You cannot access another user's assessment attempt" });
         return;
       }
 
@@ -877,6 +889,12 @@ async function startServer() {
       const attempt = await store.get<AssessmentAttempt>('assessment_attempts', req.params.attemptId);
       if (!attempt) {
         res.status(404).json({ error: 'Attempt not found' });
+        return;
+      }
+
+      const requesterId = (req.headers['x-user-id'] as string) || DEMO_USER_ID;
+      if (attempt.userId && requesterId && attempt.userId !== requesterId) {
+        res.status(403).json({ error: "Forbidden: You cannot modify another user's assessment attempt" });
         return;
       }
 

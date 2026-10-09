@@ -36,7 +36,7 @@ export function StepPassport({ role, answeredCorrectly }: { role: Role; answered
           <button type="button" onClick={copyProfileLink} className={buttonClass()}>
             <Link2 aria-hidden="true" /> Copy profile link
           </button>
-          <Link href="/passport/demo" className={buttonClass({ variant: 'secondary' })}>
+          <Link href="/sample-passport" className={buttonClass({ variant: 'secondary' })}>
             Open full profile <ArrowUpRight aria-hidden="true" />
           </Link>
         </div>

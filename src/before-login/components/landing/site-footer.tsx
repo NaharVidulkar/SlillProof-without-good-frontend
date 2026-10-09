@@ -1,12 +1,12 @@
-import Link from 'next/link'
-import { Logo } from '@/components/brand/logo'
+import { Link } from '@bl/lib/link'
+import { Logo } from '@bl/components/brand/logo'
 
 const links = [
   { href: '/#product', label: 'Product' },
   { href: '/#how-it-works', label: 'How it works' },
   { href: '/#passport', label: 'Skill Passport' },
   { href: '/privacy', label: 'Privacy' },
-  { href: 'mailto:hello@skillprof.dev', label: 'Contact' },
+  { href: 'mailto:hello@skillproof.dev', label: 'Contact' },
 ]
 
 export function SiteFooter() {
@@ -35,7 +35,7 @@ export function SiteFooter() {
         </nav>
       </div>
       <div className="mx-auto flex max-w-6xl flex-col gap-2 border-t border-black/[0.05] px-5 py-6 font-mono text-[11px] text-muted-foreground sm:flex-row sm:justify-between sm:px-8">
-        <p>© 2026 SkillProf. All rights reserved.</p>
+        <p>© 2026 SkillProof. All rights reserved.</p>
         <p>Demo product · assessments and verification are simulated.</p>
       </div>
     </footer>

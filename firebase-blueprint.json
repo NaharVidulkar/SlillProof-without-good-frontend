@@ -1,0 +1,51 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account profile for authenticated students and employers",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "name": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "role": { "type": "string", "enum": ["student", "employer"] },
+        "provider": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" },
+        "onboardingCompleted": { "type": "boolean" },
+        "onboardingSkipped": { "type": "boolean" },
+        "passportSlug": { "type": "string", "maxLength": 32 },
+        "passportPublic": { "type": "boolean" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "AssessmentSection": {
+      "title": "AssessmentSection",
+      "description": "Personalized assessment section for a specific candidate skill",
+      "type": "object",
+      "properties": {
+        "skillSlug": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "enum": ["programming", "framework", "database", "tool", "soft-or-other"] },
+        "claimedLevel": { "type": "string", "enum": ["Beginner", "Intermediate", "Advanced"] },
+        "status": { "type": "string", "enum": ["not_started", "generating", "ready", "in_progress", "completed", "failed"] },
+        "score": { "type": "number" },
+        "verificationStatus": { "type": "string", "enum": ["Verified", "Partially verified", "Not yet verified"] },
+        "attempts": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["skillSlug", "name", "claimedLevel", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile documents keyed by Firebase auth UID"
+    },
+    "/users/{userId}/assessmentSections/{sectionId}": {
+      "schema": "AssessmentSection",
+      "description": "Personalized skill assessment sections for an individual user"
+    }
+  }
+}

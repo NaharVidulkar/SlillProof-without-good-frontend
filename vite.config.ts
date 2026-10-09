@@ -8,7 +8,16 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
+        '@bl': path.resolve(import.meta.dirname, 'src/before-login'),
+      },
+    },
+    build: {
+      rollupOptions: {
+        input: {
+          main: path.resolve(import.meta.dirname, 'index.html'),
+          landing: path.resolve(import.meta.dirname, 'landing.html'),
+        },
       },
     },
     server: {

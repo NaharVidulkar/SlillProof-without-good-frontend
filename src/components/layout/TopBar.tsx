@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, X, Award, Zap, FileText, Menu, ChevronRight } from 'lucide-react';
+import { Search, X, Award, Zap, FileText, Menu, ChevronRight, LogOut, User as UserIcon } from 'lucide-react';
 import { NavTabId } from './Sidebar.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
 
 interface SearchResultItem {
   id: string;
@@ -53,6 +54,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onNavigate,
   onOpenMobileMenu,
 }) => {
+  const { user, logout } = useAuth();
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -171,11 +173,46 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Right zone: Current Date formatted "8 October 2026, Thursday" */}
-      <div className="text-right shrink-0">
-        <span className="text-xs sm:text-sm font-bold text-[#3B4A6B]">
-          {formattedDate}
-        </span>
+      {/* Right zone: Current Date + User Profile & Logout */}
+      <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+        <div className="text-right hidden md:block">
+          <span className="text-xs sm:text-sm font-bold text-[#3B4A6B]">
+            {formattedDate}
+          </span>
+        </div>
+
+        {user && (
+          <div className="flex items-center gap-2 pl-2 sm:pl-3 border-l border-slate-200">
+            {user.photoURL ? (
+              <img
+                src={user.photoURL}
+                alt={user.name || 'User avatar'}
+                className="w-8 h-8 rounded-full border border-slate-200 object-cover shadow-2xs"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-[#4A64B8] text-white flex items-center justify-center text-xs font-bold shadow-2xs">
+                {user.name ? user.name.charAt(0).toUpperCase() : <UserIcon className="w-4 h-4" />}
+              </div>
+            )}
+            <div className="hidden sm:flex flex-col text-left">
+              <span className="text-xs font-bold text-[#3B4A6B] max-w-[120px] truncate">
+                {user.name || user.email || 'Candidate'}
+              </span>
+              <span className="text-[10px] text-[#8A94AD] max-w-[120px] truncate">
+                {user.email}
+              </span>
+            </div>
+            <button
+              onClick={() => logout()}
+              title="Sign out"
+              aria-label="Sign out"
+              className="p-1.5 rounded-lg text-[#8A94AD] hover:text-[#E04D5A] hover:bg-red-50 transition-colors cursor-pointer ml-1"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

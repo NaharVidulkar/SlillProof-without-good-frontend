@@ -4,9 +4,13 @@
  */
 
 import express from 'express';
+import cookieParser from 'cookie-parser';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { adminAuth, adminDb, FieldValue, DecodedIdToken, firebaseConfig } from './lib/server/firebase-admin.ts';
 import {
   getAllPublicProblems,
   getPublicProblemById,
@@ -22,6 +26,12 @@ import { evaluateSkill } from './lib/domain/scoring.ts';
 import { calculateCareerReadiness } from './lib/server/roles.ts';
 import { QUIZ_QUESTION_BANK } from './lib/server/quizBank.ts';
 import { analyzeJobMatch } from './lib/ai/jobMatcher.ts';
+import {
+  parseResumeWithGemini,
+  parseTextProfileWithGemini,
+  generateSkillAssessmentWithGemini,
+  GeneratedAssessment,
+} from './lib/ai/onboarding-gemini.ts';
 import {
   DEMO_CANDIDATES,
   rankCandidates,
@@ -62,7 +72,581 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json({ limit: '500kb' }));
+  // Enable trust proxy so secure cookies work behind reverse proxies
+  app.set('trust proxy', 1);
+
+  // AUTH_GATE: enabled by default, disabled only when set explicitly to "false"
+  const AUTH_GATE = process.env.AUTH_GATE !== 'false';
+
+  const SESSION_SECRET =
+    process.env.SESSION_SECRET || 'skillproof-session-secret-key-391840294829';
+
+  interface CustomSessionPayload {
+    uid: string;
+    email: string | null;
+    name: string | null;
+    picture: string | null;
+    exp: number; // in seconds
+  }
+
+  function signSessionPayload(payload: CustomSessionPayload, secret: string): string {
+    const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+    return `${data}.${signature}`;
+  }
+
+  function verifySessionPayload(token: string, secret: string): CustomSessionPayload | null {
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 2) return null;
+      const [data, signature] = parts;
+      const expectedSig = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+      if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+        return null;
+      }
+      const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf-8')) as CustomSessionPayload;
+      if (typeof payload.exp === 'number' && Date.now() / 1000 > payload.exp) {
+        return null;
+      }
+      return payload;
+    } catch {
+      return null;
+    }
+  }
+
+  app.use(express.json({ limit: '10mb' }));
+  app.use(cookieParser(SESSION_SECRET));
+
+  // Auth Middleware
+  const verifySession = async (req: express.Request): Promise<DecodedIdToken | null> => {
+    // Development / smoke test bypass with x-user-id header
+    const testHeader = req.headers['x-user-id'];
+    if (testHeader && testHeader === DEMO_USER_ID && process.env.NODE_ENV !== 'production') {
+      return {
+        uid: DEMO_USER_ID,
+        email: 'demo@skillproof.dev',
+        name: 'Demo Candidate',
+        picture: '',
+        aud: firebaseConfig.projectId,
+        auth_time: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        iat: Math.floor(Date.now() / 1000),
+        iss: `https://securetoken.google.com/${firebaseConfig.projectId}`,
+        sub: DEMO_USER_ID,
+        firebase: { identities: {}, sign_in_provider: 'custom' },
+      };
+    }
+
+    const sessionCookie = req.cookies?.__session;
+    if (!sessionCookie || typeof sessionCookie !== 'string') return null;
+
+    // Check custom signed session cookie if contains dot separator
+    if (sessionCookie.includes('.')) {
+      const customPayload = verifySessionPayload(sessionCookie, SESSION_SECRET);
+      if (customPayload) {
+        return {
+          uid: customPayload.uid,
+          email: customPayload.email || undefined,
+          name: customPayload.name || undefined,
+          picture: customPayload.picture || undefined,
+          aud: firebaseConfig.projectId,
+          auth_time: Math.floor(Date.now() / 1000),
+          exp: customPayload.exp,
+          iat: Math.floor(Date.now() / 1000),
+          iss: `https://securetoken.google.com/${firebaseConfig.projectId}`,
+          sub: customPayload.uid,
+          firebase: { identities: {}, sign_in_provider: 'google.com' },
+        };
+      }
+    }
+
+    // Attempt Firebase Admin session cookie verification (relax checkRevoked to avoid clock-skew failures)
+    try {
+      const decodedClaims = await adminAuth.verifySessionCookie(sessionCookie, false);
+      return decodedClaims;
+    } catch {
+      return null;
+    }
+  };
+
+  const requireAuth: express.RequestHandler = async (req, res, next) => {
+    if (!AUTH_GATE) {
+      return next();
+    }
+    const sessionUser = await verifySession(req);
+    if (!sessionUser) {
+      const isApi =
+        req.baseUrl.startsWith('/api') ||
+        req.path.startsWith('/api') ||
+        req.originalUrl.startsWith('/api');
+      if (isApi) {
+        return res.status(401).json({ error: 'Unauthorized: Session missing or invalid' });
+      }
+      return res.redirect('/login');
+    }
+    (req as express.Request & { user?: DecodedIdToken }).user = sessionUser;
+    next();
+  };
+
+  // POST /api/auth/session: Exchange Firebase ID token for a secure session cookie
+  app.post('/api/auth/session', async (req, res) => {
+    const { idToken } = req.body || {};
+    if (!idToken || typeof idToken !== 'string') {
+      return res.status(400).json({ error: 'Missing idToken parameter' });
+    }
+
+    let decodedToken: DecodedIdToken;
+    try {
+      // Step 1: Verify the ID token (relax auth_time freshness check to prevent clock-skew errors)
+      decodedToken = await adminAuth.verifyIdToken(idToken, false);
+      console.log(`[Auth] verifyIdToken successful for uid: ${decodedToken.uid}`);
+      console.log(
+        `[Auth] Admin Project ID: "${firebaseConfig.projectId}" | Decoded token 'aud' claim: "${decodedToken.aud}"`
+      );
+      if (decodedToken.aud !== firebaseConfig.projectId) {
+        console.warn(
+          `[Auth] Warning: Token aud ("${decodedToken.aud}") does not match admin projectId ("${firebaseConfig.projectId}")`
+        );
+      }
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      console.error('[Auth] verifyIdToken failed. Code:', error.code, 'Message:', error.message);
+      return res.status(401).json({
+        error: 'Invalid authentication token',
+        code: error.code || 'auth/invalid-id-token',
+        message: error.message,
+      });
+    }
+
+    // Step 2: Establish session cookie (5 days expiry)
+    const expiresIn = 5 * 24 * 60 * 60 * 1000;
+    let sessionCookieVal: string;
+
+    try {
+      sessionCookieVal = await adminAuth.createSessionCookie(idToken, { expiresIn });
+      console.log('[Auth] Firebase admin createSessionCookie succeeded.');
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      console.error(
+        '[Auth] createSessionCookie failed (credential/permission error). Code:',
+        error.code,
+        'Message:',
+        error.message
+      );
+      console.log('[Auth] Issuing signed httpOnly session cookie fallback...');
+
+      // Fallback: issue our own HMAC-signed session cookie containing uid, email, exp
+      const expSec = Math.floor((Date.now() + expiresIn) / 1000);
+      sessionCookieVal = signSessionPayload(
+        {
+          uid: decodedToken.uid,
+          email: decodedToken.email || null,
+          name: decodedToken.name || decodedToken.email?.split('@')[0] || null,
+          picture: decodedToken.picture || null,
+          exp: expSec,
+        },
+        SESSION_SECRET
+      );
+    }
+
+    // Set cookie: secure: true, sameSite: 'none' for iframe preview compatibility, httpOnly: true
+    res.cookie('__session', sessionCookieVal, {
+      maxAge: expiresIn,
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      path: '/',
+    });
+
+    // Step 3: Upsert Firestore users/{uid} document (failure must not fail session creation)
+    try {
+      const userDocRef = adminDb.collection('users').doc(decodedToken.uid);
+      const userSnapshot = await userDocRef.get();
+
+      if (!userSnapshot.exists) {
+        await userDocRef.set({
+          uid: decodedToken.uid,
+          email: decodedToken.email || '',
+          name: decodedToken.name || decodedToken.email?.split('@')[0] || 'Candidate',
+          photoURL: decodedToken.picture || '',
+          role: 'student',
+          provider: decodedToken.firebase?.sign_in_provider || 'password',
+          createdAt: FieldValue.serverTimestamp(),
+          lastLoginAt: FieldValue.serverTimestamp(),
+          onboardingCompleted: false,
+          onboardingSkipped: false,
+          passportPublic: false,
+        });
+        console.log(`[Auth] Created Firestore users document for ${decodedToken.uid}`);
+      } else {
+        await userDocRef.update({
+          lastLoginAt: FieldValue.serverTimestamp(),
+        });
+        console.log(`[Auth] Updated Firestore users lastLoginAt for ${decodedToken.uid}`);
+      }
+    } catch (fsErr) {
+      console.error('[Auth] Firestore user document creation error (non-fatal):', fsErr);
+    }
+
+    return res.json({
+      ok: true,
+      user: {
+        uid: decodedToken.uid,
+        email: decodedToken.email || null,
+        name: decodedToken.name || decodedToken.email?.split('@')[0] || 'Candidate',
+        photoURL: decodedToken.picture || null,
+      },
+    });
+  });
+
+  // POST /api/auth/logout: Clear session cookie
+  app.post('/api/auth/logout', (_req, res) => {
+    res.clearCookie('__session', {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+    });
+    return res.json({ ok: true });
+  });
+
+  // GET /api/me: Return authenticated user info with onboarding status
+  app.get('/api/me', async (req, res) => {
+    if (!AUTH_GATE) {
+      return res.json({
+        uid: DEMO_USER_ID,
+        email: 'demo@skillproof.dev',
+        name: 'Demo Candidate',
+        photoURL: null,
+        onboardingCompleted: true,
+        onboardingSkipped: false,
+        profile: null,
+        skills: [],
+      });
+    }
+
+    const sessionUser = await verifySession(req);
+    if (!sessionUser) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    let onboardingCompleted = false;
+    let onboardingSkipped = false;
+    let profile = null;
+    let skills: any[] = [];
+
+    try {
+      const userDoc = await adminDb.collection('users').doc(sessionUser.uid).get();
+      if (userDoc.exists) {
+        const udata = userDoc.data();
+        onboardingCompleted = Boolean(udata?.onboardingCompleted);
+        onboardingSkipped = Boolean(udata?.onboardingSkipped);
+        profile = udata?.profile || null;
+        skills = udata?.skills || [];
+      }
+    } catch (fsErr) {
+      console.error('[Auth] Error fetching user doc in /api/me:', fsErr);
+    }
+
+    return res.json({
+      uid: sessionUser.uid,
+      email: sessionUser.email || null,
+      name: sessionUser.name || sessionUser.email?.split('@')[0] || 'Candidate',
+      photoURL: sessionUser.picture || null,
+      onboardingCompleted,
+      onboardingSkipped,
+      profile,
+      skills,
+    });
+  });
+
+  // ==========================================
+  // ONBOARDING & GEMINI SKILL ASSESSMENT ROUTES
+  // ==========================================
+
+  // In-memory cache for active generated assessments
+  const activeAssessmentsMap = new Map<string, GeneratedAssessment>();
+
+  // POST /api/onboarding/parse-resume: Extract candidate profile and skills via Gemini
+  app.post('/api/onboarding/parse-resume', async (req, res) => {
+    try {
+      const { fileData, fileName, mimeType, textContent } = req.body || {};
+      if (!fileData && !textContent) {
+        return res.status(400).json({ error: 'No resume file data or text content provided' });
+      }
+
+      console.log(`[Onboarding] Parsing resume with Gemini (${fileName || 'text'})...`);
+      const profile = await parseResumeWithGemini({
+        fileData,
+        fileName,
+        mimeType: mimeType || 'application/pdf',
+        textContent,
+      });
+
+      return res.json({ ok: true, profile });
+    } catch (err: unknown) {
+      console.error('[Onboarding] parse-resume failed:', err);
+      return res.status(500).json({
+        error: 'Failed to parse resume document',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // POST /api/onboarding/parse-text: Turn free-text background into structured skills via Gemini
+  app.post('/api/onboarding/parse-text', async (req, res) => {
+    try {
+      const { text } = req.body || {};
+      if (!text || typeof text !== 'string' || !text.trim()) {
+        return res.status(400).json({ error: 'Please enter a description of yourself and your skills.' });
+      }
+
+      console.log('[Onboarding] Parsing user text with Gemini...');
+      const profile = await parseTextProfileWithGemini(text.trim());
+
+      return res.json({ ok: true, profile });
+    } catch (err: unknown) {
+      console.error('[Onboarding] parse-text failed:', err);
+      return res.status(500).json({
+        error: 'Failed to process background text',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // POST /api/onboarding/complete: Save confirmed profile and top skills to Firestore
+  app.post('/api/onboarding/complete', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      const { role, fieldOfStudy, yearsOfExperience, skills } = req.body || {};
+      const confirmedSkills = Array.isArray(skills)
+        ? skills.slice(0, 5).map((s: any) => ({
+            name: typeof s === 'string' ? s.trim() : String(s.name || '').trim(),
+            level: s.level || 'Intermediate',
+            verified: false,
+          }))
+        : [];
+
+      const profileData = {
+        role: typeof role === 'string' && role.trim() ? role.trim() : 'Software Developer',
+        fieldOfStudy: typeof fieldOfStudy === 'string' && fieldOfStudy.trim() ? fieldOfStudy.trim() : 'Computer Science',
+        yearsOfExperience: typeof yearsOfExperience === 'number' ? yearsOfExperience : 1,
+      };
+
+      // Persist to Firestore
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            onboardingCompleted: true,
+            onboardingSkipped: false,
+            profile: profileData,
+            skills: confirmedSkills,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        console.log(`[Onboarding] Completed for user ${uid} with ${confirmedSkills.length} skills`);
+      } catch (fsErr) {
+        console.error('[Onboarding] Firestore write error (non-fatal):', fsErr);
+      }
+
+      return res.json({
+        ok: true,
+        message: 'Onboarding completed',
+        profile: profileData,
+        skills: confirmedSkills,
+      });
+    } catch (err: unknown) {
+      console.error('[Onboarding] complete failed:', err);
+      return res.status(500).json({ error: 'Failed to save onboarding profile' });
+    }
+  });
+
+  // POST /api/onboarding/skip: Skip onboarding for now
+  app.post('/api/onboarding/skip', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            onboardingSkipped: true,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (fsErr) {
+        console.error('[Onboarding] Firestore skip write error:', fsErr);
+      }
+
+      return res.json({ ok: true, skipped: true });
+    } catch (err: unknown) {
+      console.error('[Onboarding] skip failed:', err);
+      return res.status(500).json({ error: 'Failed to record skip preference' });
+    }
+  });
+
+  // POST /api/skills/assess/generate: Generate tailored questions using Gemini for any skill
+  app.post('/api/skills/assess/generate', async (req, res) => {
+    try {
+      const { skillName, level } = req.body || {};
+      if (!skillName || typeof skillName !== 'string') {
+        return res.status(400).json({ error: 'Missing required skillName parameter' });
+      }
+
+      console.log(`[Assessment] Generating questions for ${skillName} (${level || 'Intermediate'})...`);
+      const assessment = await generateSkillAssessmentWithGemini(skillName.trim(), level || 'Intermediate');
+      activeAssessmentsMap.set(assessment.id, assessment);
+
+      // Return questions with correctOptionId and explanation stripped for integrity
+      const publicQuestions = assessment.questions.map((q) => ({
+        id: q.id,
+        prompt: q.prompt,
+        codeSnippet: q.codeSnippet,
+        options: q.options,
+        difficulty: q.difficulty,
+      }));
+
+      return res.json({
+        id: assessment.id,
+        skillName: assessment.skillName,
+        level: assessment.level,
+        questions: publicQuestions,
+      });
+    } catch (err: unknown) {
+      console.error('[Assessment] generate failed:', err);
+      return res.status(500).json({
+        error: 'Failed to generate skill assessment',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // POST /api/skills/assess/submit: Grade candidate answers and award verified skill badge
+  app.post('/api/skills/assess/submit', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      const { assessmentId, skillName, level, answers } = req.body || {};
+      if (!assessmentId || !answers) {
+        return res.status(400).json({ error: 'Missing assessmentId or answers' });
+      }
+
+      const assessment = activeAssessmentsMap.get(assessmentId);
+      if (!assessment) {
+        return res.status(404).json({ error: 'Assessment session expired or not found. Please restart the assessment.' });
+      }
+
+      let correctCount = 0;
+      const totalCount = assessment.questions.length;
+      const questionReviews = assessment.questions.map((q) => {
+        const candidateAnswer = answers[q.id];
+        const isCorrect = candidateAnswer === q.correctOptionId;
+        if (isCorrect) correctCount++;
+
+        return {
+          id: q.id,
+          prompt: q.prompt,
+          userChoice: candidateAnswer,
+          correctChoice: q.correctOptionId,
+          isCorrect,
+          explanation: q.explanation,
+        };
+      });
+
+      const score = Math.round((correctCount / Math.max(1, totalCount)) * 100);
+      const tier = score >= 85 ? 'Advanced' : score >= 60 ? 'Intermediate' : score >= 40 ? 'Beginner' : 'Novice';
+      const passed = score >= 60;
+
+      const skillSlug = (skillName || assessment.skillName).toLowerCase().replace(/\s+/g, '-');
+
+      // Add to evidence store
+      const evidenceItem: EvidenceItem = {
+        id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        userId: uid,
+        skillId: skillSlug,
+        type: 'knowledge',
+        score: score / 100,
+        difficulty: 2,
+        sourceRef: assessmentId,
+        integrity: 0.85,
+        createdAt: new Date().toISOString(),
+        details: {
+          problemTitle: `Verified diagnostic for ${assessment.skillName}`,
+          correctnessPercent: score,
+          verdictSummary: `${correctCount}/${totalCount} questions correct (${tier})`,
+        },
+      };
+
+      await store.put('skill_evidence', evidenceItem.id, evidenceItem);
+
+      // Record quiz attempt for dashboard display
+      const quizAttempt: QuizAttempt = {
+        id: `quiz_${Date.now()}`,
+        userId: uid,
+        startedAt: assessment.createdAt,
+        deadlineAt: new Date(Date.now() + 3600000).toISOString(),
+        completedAt: new Date().toISOString(),
+        status: 'completed',
+        questionIds: assessment.questions.map((q) => q.id),
+        answers: answers as Record<string, string>,
+        passedCount: correctCount,
+        totalCount,
+        score,
+      };
+      await store.put('quiz_attempts', quizAttempt.id, quizAttempt);
+
+      // Persist verified skill to Firestore user document
+      try {
+        const userRef = adminDb.collection('users').doc(uid);
+        const userDoc = await userRef.get();
+        if (userDoc.exists) {
+          const udata = userDoc.data();
+          const existingSkills = Array.isArray(udata?.skills) ? udata.skills : [];
+          const updatedSkills = existingSkills.map((s: any) => {
+            if (s.name.toLowerCase() === assessment.skillName.toLowerCase()) {
+              return { ...s, verified: true, score, tier, verifiedAt: new Date().toISOString() };
+            }
+            return s;
+          });
+          // If skill was not in list, add it
+          if (!updatedSkills.some((s: any) => s.name.toLowerCase() === assessment.skillName.toLowerCase())) {
+            updatedSkills.push({
+              name: assessment.skillName,
+              level: tier,
+              verified: true,
+              score,
+              tier,
+              verifiedAt: new Date().toISOString(),
+            });
+          }
+          await userRef.update({ skills: updatedSkills });
+        }
+      } catch (fsErr) {
+        console.error('[Assessment] Firestore update error (non-fatal):', fsErr);
+      }
+
+      return res.json({
+        ok: true,
+        assessmentId,
+        skillName: assessment.skillName,
+        score,
+        correctCount,
+        totalCount,
+        tier,
+        passed,
+        questionReviews,
+        evidenceId: evidenceItem.id,
+      });
+    } catch (err: unknown) {
+      console.error('[Assessment] submit failed:', err);
+      return res.status(500).json({ error: 'Failed to grade assessment' });
+    }
+  });
 
   // Redirect legacy /challenges paths to /assessments
   app.get('/challenges*', (req, res) => {
@@ -114,6 +698,9 @@ async function startServer() {
 
     return evaluated;
   }
+
+  // Protect all remaining /api/* routes with requireAuth (auth routes are already defined above)
+  app.use('/api', requireAuth);
 
   // Stage 0: Diagnostic env check endpoint (never leaks values)
   app.get('/api/health/env', (_req, res) => {
@@ -458,19 +1045,23 @@ async function startServer() {
   });
 
   // Stage 5: Candidate Skills and Dashboard
-  app.get('/api/me/skills', async (_req, res) => {
-    const evaluated = await getUserEvaluatedSkills(DEMO_USER_ID);
+  app.get('/api/me/skills', async (req, res) => {
+    const sessionUser = await verifySession(req);
+    const userId = sessionUser?.uid || DEMO_USER_ID;
+    const evaluated = await getUserEvaluatedSkills(userId);
     res.json(evaluated);
   });
 
-  app.get('/api/me/dashboard', async (_req, res) => {
-    const evaluated = await getUserEvaluatedSkills(DEMO_USER_ID);
+  app.get('/api/me/dashboard', async (req, res) => {
+    const sessionUser = await verifySession(req);
+    const userId = sessionUser?.uid || DEMO_USER_ID;
+    const evaluated = await getUserEvaluatedSkills(userId);
     const skillsMap = new Map(evaluated.map((s) => [s.skillId, s]));
     const readiness = calculateCareerReadiness('backend-developer', skillsMap);
 
     const submissions = await store.list<Submission>('submissions');
     const userSubmissions = submissions
-      .filter((s) => s.userId === DEMO_USER_ID && s.status === 'completed')
+      .filter((s) => s.userId === userId && s.status === 'completed')
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 5)
       .map((s) => ({
@@ -484,7 +1075,7 @@ async function startServer() {
 
     const quizAttempts = await store.list<QuizAttempt>('quiz_attempts');
     const userQuizzes = quizAttempts
-      .filter((q) => q.userId === DEMO_USER_ID && q.status === 'completed')
+      .filter((q) => q.userId === userId && q.status === 'completed')
       .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
       .slice(0, 3)
       .map((q) => ({
@@ -498,7 +1089,7 @@ async function startServer() {
 
     const assessmentAttempts = await store.list<AssessmentAttempt>('assessment_attempts');
     const userAssessmentAttempts = assessmentAttempts
-      .filter((a) => a.userId === DEMO_USER_ID && a.status === 'completed' && a.result)
+      .filter((a) => a.userId === userId && a.status === 'completed' && a.result)
       .sort((a, b) => new Date(b.completedAt || 0).getTime() - new Date(a.completedAt || 0).getTime())
       .slice(0, 3)
       .map((a) => ({
@@ -1389,17 +1980,85 @@ async function startServer() {
   });
 
   const isProduction = process.env.NODE_ENV === 'production';
+  const landingRoutes = [
+    '/',
+    '/landing',
+    '/landing.html',
+    '/privacy',
+    '/sample-passport',
+    '/login',
+    '/signup',
+    '/forgot-password',
+  ];
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'spa',
+      appType: 'custom',
     });
+
+    // Public before-login landing routes
+    app.get(landingRoutes, async (req, res, next) => {
+      try {
+        if (AUTH_GATE) {
+          const sessionUser = await verifySession(req);
+          if (sessionUser) {
+            // If already signed in and visiting /login or /signup, redirect to root
+            if (req.path === '/login' || req.path === '/signup') {
+              return res.redirect('/');
+            }
+            // If already signed in and visiting root '/', serve private app index.html
+            if (req.path === '/' || req.path === '/landing' || req.path === '/landing.html') {
+              const indexHtmlPath = path.resolve(__dirname, 'index.html');
+              let html = await fs.promises.readFile(indexHtmlPath, 'utf-8');
+              html = await vite.transformIndexHtml(req.originalUrl, html);
+              return res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+            }
+          }
+        }
+
+        const landingHtmlPath = path.resolve(__dirname, 'landing.html');
+        let html = await fs.promises.readFile(landingHtmlPath, 'utf-8');
+        html = await vite.transformIndexHtml(req.originalUrl, html);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+      } catch (e) {
+        next(e);
+      }
+    });
+
+    // Vite internal middleware (assets, HMR, modules)
     app.use(vite.middlewares);
+
+    // After-login application SPA fallback (dashboard, assessments, etc.)
+    // Gated by requireAuth
+    app.get('*', requireAuth, async (req, res, next) => {
+      try {
+        const indexHtmlPath = path.resolve(__dirname, 'index.html');
+        let html = await fs.promises.readFile(indexHtmlPath, 'utf-8');
+        html = await vite.transformIndexHtml(req.originalUrl, html);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req, res) => {
+    app.get(landingRoutes, async (req, res) => {
+      if (AUTH_GATE) {
+        const sessionUser = await verifySession(req);
+        if (sessionUser) {
+          if (req.path === '/login' || req.path === '/signup') {
+            return res.redirect('/');
+          }
+          if (req.path === '/' || req.path === '/landing' || req.path === '/landing.html') {
+            return res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+          }
+        }
+      }
+      res.sendFile(path.resolve(__dirname, 'dist', 'landing.html'));
+    });
+    app.get('*', requireAuth, (_req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }

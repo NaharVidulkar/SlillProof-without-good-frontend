@@ -2,11 +2,11 @@
 
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, Menu, X } from 'lucide-react'
-import Link from 'next/link'
+import { Link } from '@bl/lib/link'
 import { useEffect, useState } from 'react'
-import { Logo } from '@/components/brand/logo'
-import { cn } from '@/lib/utils'
-import { buttonClass, easeOut } from '@/lib/ui'
+import { Logo } from '@bl/components/brand/logo'
+import { cn } from '@bl/lib/utils'
+import { buttonClass, easeOut } from '@bl/lib/ui'
 
 const links = [
   { href: '#product', label: 'Product' },
@@ -60,12 +60,12 @@ export function SiteNav() {
           </div>
           <div className="hidden items-center gap-2 md:flex">
             <Link
-              href="/dashboard"
+              href="/login"
               className="rounded-md px-3 py-2 text-sm text-muted-foreground outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-brand/60"
             >
               Sign in
             </Link>
-            <Link href="/assessment/demo" className={buttonClass({ size: 'sm' })}>
+            <Link href="/signup" className={buttonClass({ size: 'sm' })}>
               Get started
               <ArrowRight className="transition-transform duration-200 group-hover/btn:translate-x-0.5" aria-hidden="true" />
             </Link>
@@ -127,10 +127,10 @@ export function SiteNav() {
                 transition={{ delay: 0.2 }}
                 className="mt-6 grid grid-cols-2 gap-3"
               >
-                <Link href="/dashboard" className={buttonClass({ variant: 'secondary', size: 'lg' })}>
+                <Link href="/login" className={buttonClass({ variant: 'secondary', size: 'lg' })}>
                   Sign in
                 </Link>
-                <Link href="/assessment/demo" className={buttonClass({ size: 'lg' })}>
+                <Link href="/signup" className={buttonClass({ size: 'lg' })}>
                   Get started
                 </Link>
               </motion.li>

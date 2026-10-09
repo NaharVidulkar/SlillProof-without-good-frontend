@@ -2,13 +2,13 @@
 
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowUpRight, BadgeCheck, Eye, Link2, ShieldCheck, X } from 'lucide-react'
-import Link from 'next/link'
+import { Link } from '@bl/lib/link'
 import { useEffect, useRef, useState } from 'react'
-import { Eyebrow } from '@/components/shared/bits'
-import { Reveal } from '@/components/shared/motion'
-import { PassportCard } from '@/components/shared/passport-card'
-import { evidence, passportSkills, student } from '@/lib/data'
-import { buttonClass, copyProfileLink, easeOut } from '@/lib/ui'
+import { Eyebrow } from '@bl/components/shared/bits'
+import { Reveal } from '@bl/components/shared/motion'
+import { PassportCard } from '@bl/components/shared/passport-card'
+import { evidence, passportSkills, student, type EvidenceItem, type PassportSkill } from '@bl/lib/data'
+import { buttonClass, copyProfileLink, easeOut } from '@bl/lib/ui'
 
 function SampleProfileModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -58,7 +58,7 @@ function SampleProfileModal({ open, onClose }: { open: boolean; onClose: () => v
                 <p id="sample-profile-title" className="text-[15px] font-semibold tracking-tight text-ink">
                   Sample profile
                 </p>
-                <p className="font-mono text-[11px] text-muted-foreground">skillprof.dev/passport/demo</p>
+                <p className="font-mono text-[11px] text-muted-foreground">skillproof.dev/sample-passport</p>
               </div>
               <button
                 ref={closeRef}
@@ -88,7 +88,7 @@ function SampleProfileModal({ open, onClose }: { open: boolean; onClose: () => v
               </div>
               <h3 className="mt-8 text-[13px] font-medium text-muted-foreground">Skills</h3>
               <ul className="mt-3 divide-y divide-border rounded-xl border border-border bg-white">
-                {passportSkills.map((s) => (
+                {passportSkills.map((s: PassportSkill) => (
                   <li key={s.name} className="flex items-center gap-3 px-4 py-3">
                     <BadgeCheck
                       className={s.status === 'verified' ? 'size-4 text-verified' : 'size-4 text-muted-foreground'}
@@ -103,7 +103,7 @@ function SampleProfileModal({ open, onClose }: { open: boolean; onClose: () => v
               </ul>
               <h3 className="mt-8 text-[13px] font-medium text-muted-foreground">Recent evidence</h3>
               <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-                {evidence.map((e) => (
+                {evidence.map((e: EvidenceItem) => (
                   <li key={e.title} className="rounded-lg border border-border bg-white px-3.5 py-3">
                     <p className="text-sm font-medium text-ink">{e.title}</p>
                     <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
@@ -113,7 +113,7 @@ function SampleProfileModal({ open, onClose }: { open: boolean; onClose: () => v
                 ))}
               </ul>
               <div className="mt-8 flex flex-wrap gap-3">
-                <Link href="/passport/demo" className={buttonClass()}>
+                <Link href="/sample-passport" className={buttonClass()}>
                   Open full profile <ArrowUpRight aria-hidden="true" />
                 </Link>
                 <button type="button" onClick={copyProfileLink} className={buttonClass({ variant: 'secondary' })}>

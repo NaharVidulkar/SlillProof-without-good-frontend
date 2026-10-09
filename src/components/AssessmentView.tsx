@@ -49,8 +49,13 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
     }
   }, [initialAssessmentId]);
 
+  const lastAttemptModeRef = React.useRef<boolean | null>(null);
   React.useEffect(() => {
-    onAttemptModeChange?.(subView === 'attempt');
+    const isAttempt = subView === 'attempt';
+    if (lastAttemptModeRef.current !== isAttempt) {
+      lastAttemptModeRef.current = isAttempt;
+      onAttemptModeChange?.(isAttempt);
+    }
   }, [subView, onAttemptModeChange]);
 
   const handleSelectAssessment = (id: string) => {

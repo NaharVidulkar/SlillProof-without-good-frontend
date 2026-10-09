@@ -1,7 +1,7 @@
 import { ArrowRight } from 'lucide-react'
-import Link from 'next/link'
-import { Logomark } from '@/components/brand/logo'
-import { buttonClass } from '@/lib/ui'
+import { Link } from '@bl/lib/link'
+import { Logomark } from '@bl/components/brand/logo'
+import { buttonClass } from '@bl/lib/ui'
 
 export function FinalCta() {
   return (
@@ -20,7 +20,7 @@ export function FinalCta() {
           </h2>
           <p className="mt-5 text-pretty text-lg text-white/60">Build a profile that shows what you can actually do.</p>
           <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:gap-6">
-            <Link href="/assessment/demo" className={buttonClass({ variant: 'inverse', size: 'lg' })}>
+            <Link href="/signup" className={buttonClass({ variant: 'inverse', size: 'lg' })}>
               Get started
               <ArrowRight className="transition-transform group-hover/btn:translate-x-0.5" aria-hidden="true" />
             </Link>

@@ -1,10 +1,69 @@
+import React, { useState } from 'react';
 import { Logomark } from '@bl/components/brand/logo';
 import { SiteFooter } from '@bl/components/landing/site-footer';
 import { SiteNav } from '@bl/components/landing/site-nav';
 import { Link } from '@bl/lib/link';
 import { buttonClass } from '@bl/lib/ui';
+import { signInWithGoogle, signUpWithEmail } from '../../firebase';
+import { formatAuthError, FormattedAuthError } from '../lib/auth-errors';
 
 export function SignupPage() {
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<FormattedAuthError | null>(null);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      setGoogleLoading(true);
+      setError(null);
+      await signInWithGoogle();
+      window.location.assign('/');
+    } catch (err: unknown) {
+      console.error('Sign-up error:', err);
+      setError(formatAuthError(err, 'An unexpected error occurred during Google sign-up.'));
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleEmailSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError({ message: 'Please enter your email address.' });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError({ message: 'Please enter a valid email address.' });
+      return;
+    }
+    if (!password) {
+      setError({ message: 'Please create a password.' });
+      return;
+    }
+    if (password.length < 8) {
+      setError({ message: 'Password must be at least 8 characters long.' });
+      return;
+    }
+
+    try {
+      setEmailLoading(true);
+      await signUpWithEmail(trimmedEmail, password);
+      window.location.assign('/');
+    } catch (err: unknown) {
+      console.error('Email signup error:', err);
+      setError(formatAuthError(err, 'Failed to create your account. Please try again.'));
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const isAnyLoading = googleLoading || emailLoading;
+
   return (
     <>
       <title>Sign up · SkillProof</title>
@@ -19,39 +78,115 @@ export function SignupPage() {
             </p>
           </div>
 
-          <div className="mt-8 space-y-4">
-            <div>
-              <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Email address
-              </label>
-              <input
-                type="email"
-                disabled
-                placeholder="you@example.com"
-                className="mt-1.5 w-full rounded-lg border border-border bg-muted/40 px-3.5 py-2 text-sm text-ink outline-none"
-              />
+          {error && (
+            <div
+              role="alert"
+              className="mt-6 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-700 leading-relaxed"
+            >
+              <div className="font-semibold text-red-800 mb-0.5">Authentication Error</div>
+              <p>{error.message}</p>
+              {error.code && (
+                <div className="mt-1.5 font-mono text-[11px] text-red-800/80 bg-red-100/60 px-2 py-0.5 rounded inline-block">
+                  Code: {error.code}
+                </div>
+              )}
             </div>
-            <div>
-              <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Password
-              </label>
-              <input
-                type="password"
-                disabled
-                placeholder="••••••••"
-                className="mt-1.5 w-full rounded-lg border border-border bg-muted/40 px-3.5 py-2 text-sm text-ink outline-none"
-              />
-            </div>
+          )}
+
+          <div className="mt-6 space-y-4">
             <button
               type="button"
-              disabled
-              className={buttonClass({ variant: 'primary', size: 'lg', className: 'w-full opacity-60 cursor-not-allowed' })}
+              disabled={isAnyLoading}
+              onClick={handleGoogleSignIn}
+              className={buttonClass({
+                variant: 'secondary',
+                size: 'lg',
+                className: 'w-full flex items-center justify-center gap-3 font-medium transition-all shadow-2xs hover:bg-slate-50 disabled:opacity-50 cursor-pointer',
+              })}
             >
-              Create Account (Stage 2)
+              {googleLoading ? (
+                <div className="size-4 animate-spin rounded-full border-2 border-[#3B4A6B] border-t-transparent" />
+              ) : (
+                <svg className="size-4" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                  />
+                </svg>
+              )}
+              <span>{googleLoading ? 'Connecting to Google...' : 'Continue with Google'}</span>
             </button>
-            <p className="text-center text-xs text-muted-foreground">
-              Authentication will be fully connected in Stage 2.
-            </p>
+
+            <div className="relative my-4 flex items-center">
+              <div className="flex-grow border-t border-border"></div>
+              <span className="mx-3 text-[11px] uppercase tracking-wider text-muted-foreground font-medium">or</span>
+              <div className="flex-grow border-t border-border"></div>
+            </div>
+
+            <form onSubmit={handleEmailSignUp} className="space-y-4">
+              <div>
+                <label htmlFor="signup-email" className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Email address
+                </label>
+                <input
+                  id="signup-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={isAnyLoading}
+                  placeholder="you@example.com"
+                  className="mt-1.5 w-full rounded-lg border border-border bg-white px-3.5 py-2 text-sm text-ink outline-none transition focus:border-brand focus:ring-1 focus:ring-brand disabled:opacity-50"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="signup-password" className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Password (min 8 characters)
+                </label>
+                <input
+                  id="signup-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={isAnyLoading}
+                  placeholder="••••••••"
+                  className="mt-1.5 w-full rounded-lg border border-border bg-white px-3.5 py-2 text-sm text-ink outline-none transition focus:border-brand focus:ring-1 focus:ring-brand disabled:opacity-50"
+                />
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                By creating an account, you get access to verified technical skill assessments and public credential sharing.
+              </p>
+
+              <button
+                type="submit"
+                disabled={isAnyLoading}
+                className={buttonClass({
+                  variant: 'primary',
+                  size: 'lg',
+                  className: 'w-full flex items-center justify-center gap-2 font-medium cursor-pointer disabled:opacity-50 mt-2',
+                })}
+              >
+                {emailLoading ? (
+                  <div className="size-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : null}
+                <span>{emailLoading ? 'Creating account...' : 'Create Account with Email'}</span>
+              </button>
+            </form>
           </div>
 
           <div className="mt-6 border-t border-border pt-4 text-center text-sm text-muted-foreground">

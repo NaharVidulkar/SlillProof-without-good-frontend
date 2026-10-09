@@ -108,22 +108,15 @@ export const ChallengeWorkspace: React.FC<ChallengeWorkspaceProps> = ({
   };
 
   // Load code from localStorage or fallback to starter code
-  const loadCodeForLanguage = useCallback(
-    (lang: SupportedLanguage) => {
-      const storageKey = `skillproof_code_${problem.id}_${lang}`;
-      const saved = localStorage.getItem(storageKey);
-      if (saved !== null) {
-        setCode(saved);
-      } else {
-        setCode(problem.starterCode[lang] || '');
-      }
-    },
-    [problem.id, problem.starterCode]
-  );
-
   useEffect(() => {
-    loadCodeForLanguage(language);
-  }, [language, loadCodeForLanguage]);
+    const storageKey = `skillproof_code_${problem.id}_${language}`;
+    const saved = localStorage.getItem(storageKey);
+    if (saved !== null) {
+      setCode(saved);
+    } else {
+      setCode(problem.starterCode?.[language] || '');
+    }
+  }, [problem.id, language, problem.starterCode?.[language]]);
 
   const handleEditorChange = (value: string | undefined) => {
     const newCode = value ?? '';
@@ -599,7 +592,7 @@ export const ChallengeWorkspace: React.FC<ChallengeWorkspaceProps> = ({
                   {/* Selector for Visible tests and Hidden tests */}
                   <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-800 pb-2">
                     <span className="text-[11px] text-slate-400 mr-1">Visible:</span>
-                    {problem.visibleTests.map((_, idx) => {
+                    {(problem.visibleTests || []).map((_, idx) => {
                       const runResult = runResults?.[idx];
                       const subResult = currentSubmission?.visibleTestResults?.[idx];
                       const verdict = subResult?.verdict || runResult?.verdict;
@@ -651,7 +644,7 @@ export const ChallengeWorkspace: React.FC<ChallengeWorkspaceProps> = ({
                     <div>
                       <div className="text-[11px] text-slate-400 mb-1">Standard Input:</div>
                       <pre className="bg-slate-900 p-2.5 rounded border border-slate-800 text-slate-200 whitespace-pre overflow-x-auto text-[11px] font-mono">
-                        {problem.visibleTests[selectedTestIndex]?.input}
+                        {problem.visibleTests?.[selectedTestIndex]?.input}
                       </pre>
                     </div>
 
@@ -671,7 +664,7 @@ export const ChallengeWorkspace: React.FC<ChallengeWorkspaceProps> = ({
                         )}
                       </div>
                       <pre className="bg-slate-900 p-2.5 rounded border border-slate-800 text-emerald-400 whitespace-pre overflow-x-auto text-[11px] font-mono">
-                        {problem.visibleTests[selectedTestIndex]?.expected}
+                        {problem.visibleTests?.[selectedTestIndex]?.expected}
                       </pre>
                     </div>
                   </div>

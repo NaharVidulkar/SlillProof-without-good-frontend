@@ -2,14 +2,14 @@
 
 import { motion } from 'motion/react'
 import { BadgeCheck, CalendarDays, GraduationCap, Link2, MapPin, ShieldCheck } from 'lucide-react'
-import Link from 'next/link'
-import { Logo } from '@/components/brand/logo'
-import { DemoTag, InProgressBadge, VerifiedBadge } from '@/components/shared/bits'
-import { Reveal } from '@/components/shared/motion'
-import { PassportCard } from '@/components/shared/passport-card'
-import { assessmentHistory, passportSkills, student } from '@/lib/data'
-import { buttonClass, copyProfileLink, easeOut } from '@/lib/ui'
-import { cn } from '@/lib/utils'
+import { Link } from '@bl/lib/link'
+import { Logo } from '@bl/components/brand/logo'
+import { DemoTag, InProgressBadge, VerifiedBadge } from '@bl/components/shared/bits'
+import { Reveal } from '@bl/components/shared/motion'
+import { PassportCard } from '@bl/components/shared/passport-card'
+import { assessmentHistory, passportSkills, student, type AssessmentRecord, type PassportSkill } from '@bl/lib/data'
+import { buttonClass, copyProfileLink, easeOut } from '@bl/lib/ui'
+import { cn } from '@bl/lib/utils'
 
 const verificationSteps = [
   {
@@ -63,8 +63,8 @@ export function PassportProfile() {
             <dl className="mt-8 grid max-w-sm grid-cols-3 gap-px overflow-hidden rounded-xl border border-black/[0.07] bg-black/[0.07]">
               {[
                 ['Overall', `${student.score}`],
-                ['Verified', `${passportSkills.filter((s) => s.status === 'verified').length} skills`],
-                ['Evidence', `${passportSkills.reduce((n, s) => n + s.evidenceCount, 0)} items`],
+                ['Verified', `${passportSkills.filter((s: PassportSkill) => s.status === 'verified').length} skills`],
+                ['Evidence', `${passportSkills.reduce((n: number, s: PassportSkill) => n + s.evidenceCount, 0)} items`],
               ].map(([k, v]) => (
                 <div key={k} className="bg-white px-3 py-3">
                   <dt className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{k}</dt>
@@ -91,7 +91,7 @@ export function PassportProfile() {
               <span className="font-mono text-[11px] text-muted-foreground">0–100 scale</span>
             </div>
             <ul className="divide-y divide-border">
-              {passportSkills.map((s, i) => (
+              {passportSkills.map((s: PassportSkill, i: number) => (
                 <li key={s.name} className="grid gap-4 px-5 py-5 sm:px-6 md:grid-cols-[200px_1fr_1.2fr] md:items-center">
                   <div>
                     <p className="text-[15px] font-semibold text-ink">{s.name}</p>
@@ -114,7 +114,7 @@ export function PassportProfile() {
                     <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">Assessed {s.lastAssessed}</p>
                   </div>
                   <ul className="flex flex-col gap-1.5" aria-label={`${s.name} evidence`}>
-                    {s.evidence.map((e) => (
+                    {s.evidence.map((e: string) => (
                       <li key={e} className="flex items-center gap-2 text-[13px] text-ink">
                         <BadgeCheck
                           className={cn('size-3.5 shrink-0', s.status === 'verified' ? 'text-verified' : 'text-muted-foreground')}
@@ -137,7 +137,7 @@ export function PassportProfile() {
                 Assessment history
               </h2>
               <ol className="relative mt-5 flex flex-col gap-5 border-l border-border pl-5">
-                {assessmentHistory.map((a) => (
+                {assessmentHistory.map((a: AssessmentRecord) => (
                   <li key={a.name} className="relative">
                     <span className="absolute -left-[25px] top-1.5 size-2 rounded-full bg-ink ring-4 ring-white" aria-hidden="true" />
                     <div className="flex items-baseline justify-between gap-3">
@@ -178,7 +178,7 @@ export function PassportProfile() {
 
         <div className="mt-12 flex flex-col items-center gap-3 text-center">
           <p className="text-sm text-muted-foreground">Want a profile like this?</p>
-          <Link href="/assessment/demo" className={buttonClass()}>
+          <Link href="/signup" className={buttonClass()}>
             Build your Skill Passport
           </Link>
         </div>

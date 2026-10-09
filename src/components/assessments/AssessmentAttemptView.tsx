@@ -185,18 +185,23 @@ export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
 
   // Live countdown timer
   useEffect(() => {
-    if (loading || remainingSeconds <= 0) return;
+    if (loading) return;
     const interval = setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          handleFinish(); // Auto-finish when timer reaches zero
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(interval);
+  }, [loading]);
+
+  useEffect(() => {
+    if (!loading && remainingSeconds === 0) {
+      handleFinish();
+    }
   }, [loading, remainingSeconds]);
 
   // Integrity listeners: tab switch

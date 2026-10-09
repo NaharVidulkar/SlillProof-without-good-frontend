@@ -3,15 +3,15 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowLeft, ArrowRight, Check, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
-import { DemoTag, SectionHeading } from '@/components/shared/bits'
-import { Reveal } from '@/components/shared/motion'
-import { StepRole } from '@/components/landing/demo/step-role'
-import { StepAssessment } from '@/components/landing/demo/step-assessment'
-import { StepGaps } from '@/components/landing/demo/step-gaps'
-import { StepPassport } from '@/components/landing/demo/step-passport'
-import { getRole, type RoleId } from '@/lib/data'
-import { buttonClass, easeOut } from '@/lib/ui'
-import { cn } from '@/lib/utils'
+import { DemoTag, SectionHeading } from '@bl/components/shared/bits'
+import { Reveal } from '@bl/components/shared/motion'
+import { StepRole } from '@bl/components/landing/demo/step-role'
+import { StepAssessment } from '@bl/components/landing/demo/step-assessment'
+import { StepGaps } from '@bl/components/landing/demo/step-gaps'
+import { StepPassport } from '@bl/components/landing/demo/step-passport'
+import { getRole, type RoleId } from '@bl/lib/data'
+import { buttonClass, easeOut } from '@bl/lib/ui'
+import { cn } from '@bl/lib/utils'
 
 const steps = [
   { label: 'Choose a career path', short: 'Career' },
@@ -49,7 +49,7 @@ export function InteractiveDemo() {
           <SectionHeading
             eyebrow="Interactive demo"
             title="See your path to a verified profile."
-            description="Click through a simulated SkillProf session. No sign-in, no real scoring — just the experience."
+            description="Click through a simulated SkillProof session. No sign-in, no real scoring — just the experience."
           />
           <DemoTag>Simulated experience</DemoTag>
         </Reveal>

@@ -205,7 +205,7 @@ export const ChallengesList: React.FC<ChallengesListProps> = ({ onSelectProblem 
 
                     {/* Bottom CTA */}
                     <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-medium text-slate-700 group-hover:text-slate-900">
-                      <span>{problem.visibleTests.length} visible tests · hidden test suites</span>
+                      <span>{problem.visibleTests?.length || 0} visible tests · hidden test suites</span>
                       <span className="flex items-center space-x-1 group-hover:translate-x-0.5 transition-transform text-slate-900 font-semibold">
                         <span>Open Workspace</span>
                         <ChevronRight className="w-3.5 h-3.5" />

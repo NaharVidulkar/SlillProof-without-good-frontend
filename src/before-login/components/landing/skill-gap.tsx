@@ -3,11 +3,11 @@
 import { motion } from 'motion/react'
 import { AlertTriangle, CheckCircle2, Sparkles } from 'lucide-react'
 import { useState } from 'react'
-import { DemoTag, SectionHeading } from '@/components/shared/bits'
-import { Reveal } from '@/components/shared/motion'
-import { getRole } from '@/lib/data'
-import { easeOut } from '@/lib/ui'
-import { cn } from '@/lib/utils'
+import { DemoTag, SectionHeading } from '@bl/components/shared/bits'
+import { Reveal } from '@bl/components/shared/motion'
+import { getRole, type SkillMetric } from '@bl/lib/data'
+import { easeOut } from '@bl/lib/ui'
+import { cn } from '@bl/lib/utils'
 
 type Mode = 'current' | 'target'
 
@@ -15,9 +15,9 @@ export function SkillGap() {
   const role = getRole('backend')
   const [mode, setMode] = useState<Mode>('current')
   const priorities = role.metrics
-    .map((m) => ({ ...m, gap: m.target - m.current }))
-    .filter((m) => m.gap > 0)
-    .sort((a, b) => b.gap - a.gap)
+    .map((m: SkillMetric) => ({ ...m, gap: m.target - m.current }))
+    .filter((m: SkillMetric & { gap: number }) => m.gap > 0)
+    .sort((a: SkillMetric & { gap: number }, b: SkillMetric & { gap: number }) => b.gap - a.gap)
   const maxGap = priorities[0]?.gap ?? 1
 
   return (
@@ -71,7 +71,7 @@ export function SkillGap() {
               </div>
 
               <ul className="mt-10 flex flex-col gap-7">
-                {role.metrics.map((m, i) => {
+                {role.metrics.map((m: SkillMetric, i: number) => {
                   const meets = m.current >= m.target
                   const delta = m.current - m.target
                   const primary = mode === 'current' ? m.current : m.target
@@ -141,7 +141,7 @@ export function SkillGap() {
               <div className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-card sm:p-6">
                 <p className="text-[13px] font-medium text-muted-foreground">Priority</p>
                 <ol className="mt-4 flex flex-col gap-4">
-                  {priorities.map((p, i) => (
+                  {priorities.map((p: SkillMetric & { gap: number }, i: number) => (
                     <li key={p.name} className="flex items-center gap-3">
                       <span
                         className={cn(

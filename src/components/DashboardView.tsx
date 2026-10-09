@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   RefreshCw,
   AlertCircle,
@@ -13,7 +13,12 @@ import {
   CheckCircle2,
   Clock,
   Zap,
+  Sparkles,
+  FileText,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.tsx';
+import { OnboardingModal } from './onboarding/OnboardingModal.tsx';
+import { SkillAssessmentModal } from './onboarding/SkillAssessmentModal.tsx';
 import { clientApi } from '../../lib/client/api.ts';
 import { DashboardData, SkillMetric } from '../../lib/types.ts';
 import {
@@ -61,12 +66,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenResult,
   onUpdateRightPanel,
 }) => {
+  const { user, refresh: refreshUser } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [assessmentDetail, setAssessmentDetail] = useState<PublicAssessmentDetail | null>(null);
   const [currentAttempt, setCurrentAttempt] = useState<AssessmentAttempt | null>(null);
   const [lastResult, setLastResult] = useState<AssessmentResult | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+  const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(false);
+  const [assessingSkill, setAssessingSkill] = useState<{ skillName: string; level: string } | null>(null);
+
+  // Automatically prompt onboarding if user is logged in and onboardingCompleted is not true
+  useEffect(() => {
+    if (user && user.onboardingCompleted === false && !user.onboardingSkipped && !onboardingDismissed) {
+      setShowOnboarding(true);
+    }
+  }, [user, onboardingDismissed]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -302,49 +319,76 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return list;
   }, [currentAttempt, remainingTimeText, assessmentDetail?.lastResult, dashboardData?.skills]);
 
-  // Update Right Panel in parent AppShell whenever data changes
-  useEffect(() => {
-    if (onUpdateRightPanel) {
-      const rightPanelElement = (
-        <RightPanel
-          userName="Stella Walton"
-          userRole="Student"
-          hasBadge={Boolean(assessmentDetail?.lastResult)}
-          badgeLabel={assessmentDetail?.lastResult?.badgeLabel}
-          badgePercent={assessmentDetail?.lastResult?.overallPercent}
-          badgeStatus="active"
-          calendarEvents={calendarEvents}
-          reminders={reminders}
-          onNavigateToProfile={onNavigateToProfile}
-          onViewBadge={() => {
-            if (assessmentDetail?.lastResult) {
-              onNavigateToAssessments();
-            }
-          }}
-          onStartAssessment={onNavigateToAssessments}
-          onReminderClick={(rem) => {
-            if (rem.type === 'in_progress' && assessmentDetail?.inProgressAttemptId && onOpenAttempt) {
-              onOpenAttempt(assessmentDetail.inProgressAttemptId);
-            } else {
-              onNavigateToAssessments();
-            }
-          }}
-        />
-      );
-      onUpdateRightPanel(rightPanelElement);
-    }
-
-    return () => {
-      onUpdateRightPanel?.(null);
-    };
-  }, [
-    assessmentDetail,
-    calendarEvents,
-    reminders,
-    currentAttempt,
+  const callbacksRef = useRef({
     onNavigateToAssessments,
     onNavigateToProfile,
     onOpenAttempt,
+  });
+  callbacksRef.current = {
+    onNavigateToAssessments,
+    onNavigateToProfile,
+    onOpenAttempt,
+  };
+
+  const lastRightPanelKeyRef = useRef<string>('');
+
+  // Clear Right Panel on unmount only
+  useEffect(() => {
+    return () => {
+      onUpdateRightPanel?.(null);
+    };
+  }, [onUpdateRightPanel]);
+
+  // Update Right Panel in parent AppShell whenever data changes
+  useEffect(() => {
+    if (!onUpdateRightPanel) return;
+
+    const dataKey = [
+      assessmentDetail?.lastResult?.recordId || '',
+      assessmentDetail?.inProgressAttemptId || '',
+      assessmentDetail?.remainingSeconds || 0,
+      calendarEvents.length,
+      reminders.length,
+    ].join('::');
+
+    if (lastRightPanelKeyRef.current === dataKey) {
+      return;
+    }
+    lastRightPanelKeyRef.current = dataKey;
+
+    const rightPanelElement = (
+      <RightPanel
+        userName="Stella Walton"
+        userRole="Student"
+        hasBadge={Boolean(assessmentDetail?.lastResult)}
+        badgeLabel={assessmentDetail?.lastResult?.badgeLabel}
+        badgePercent={assessmentDetail?.lastResult?.overallPercent}
+        badgeStatus="active"
+        calendarEvents={calendarEvents}
+        reminders={reminders}
+        onNavigateToProfile={() => callbacksRef.current.onNavigateToProfile()}
+        onViewBadge={() => {
+          if (assessmentDetail?.lastResult) {
+            callbacksRef.current.onNavigateToAssessments();
+          }
+        }}
+        onStartAssessment={() => callbacksRef.current.onNavigateToAssessments()}
+        onReminderClick={(rem) => {
+          if (rem.type === 'in_progress' && assessmentDetail?.inProgressAttemptId && callbacksRef.current.onOpenAttempt) {
+            callbacksRef.current.onOpenAttempt(assessmentDetail.inProgressAttemptId);
+          } else {
+            callbacksRef.current.onNavigateToAssessments();
+          }
+        }}
+      />
+    );
+    onUpdateRightPanel(rightPanelElement);
+  }, [
+    assessmentDetail?.lastResult?.recordId,
+    assessmentDetail?.inProgressAttemptId,
+    assessmentDetail?.remainingSeconds,
+    calendarEvents,
+    reminders,
     onUpdateRightPanel,
   ]);
 
@@ -546,15 +590,89 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-7">
+      {/* 0. INCOMPLETE ONBOARDING REMINDER BANNER */}
+      {user && user.onboardingCompleted === false && (
+        <div className="p-4 rounded-2xl bg-amber-50/90 border border-amber-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-amber-950">
+                Personalized Skill Setup Incomplete
+              </h4>
+              <p className="text-[11px] text-amber-900/80 mt-0.5">
+                Upload your resume or tell us your background to extract your skills and start tailored AI assessments.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowOnboarding(true)}
+            className="px-4 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 text-white font-bold text-xs shrink-0 cursor-pointer shadow-xs transition-colors"
+          >
+            Complete Onboarding
+          </button>
+        </div>
+      )}
+
       {/* 1. WELCOME BANNER matching Learnthru reference card */}
       <Banner
-        userName="Stella"
+        userName={user?.name ? user.name.split(' ')[0] : 'Stella'}
         state={bannerState}
         remainingTimeText={remainingTimeText}
         badgeLabel={assessmentDetail?.lastResult?.badgeLabel}
         badgePercent={assessmentDetail?.lastResult?.overallPercent}
         onActionClick={handleBannerAction}
       />
+
+      {/* TARGET SKILLS FOR VERIFICATION (from onboarding) */}
+      {user?.skills && user.skills.length > 0 && (
+        <div className="space-y-3 p-4.5 rounded-2xl bg-slate-50/80 border border-slate-200/80">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-[#4A64B8]" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#3B4A6B]">
+                Your Target Skills (Gemini Diagnostics)
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowOnboarding(true)}
+              className="text-[11px] font-semibold text-[#4A64B8] hover:text-[#3B4A6B] cursor-pointer"
+            >
+              Edit skills →
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {user.skills.map((skill) => (
+              <div
+                key={skill.name}
+                className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-between"
+              >
+                <div>
+                  <div className="text-xs font-bold text-ink flex items-center gap-1.5">
+                    <span>{skill.name}</span>
+                    {skill.verified && (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    )}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    {skill.verified ? `${skill.tier} (${skill.score}%)` : `Claimed: ${skill.level}`}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAssessingSkill({ skillName: skill.name, level: skill.level })}
+                  className="px-3 py-1.5 rounded-lg bg-[#4A64B8] hover:bg-[#3B4A6B] text-white text-[11px] font-semibold cursor-pointer transition-colors shadow-2xs"
+                >
+                  {skill.verified ? 'Retake' : 'Verify'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 2. ASSESSMENT SECTIONS matching reference's class cards */}
       <div className="space-y-3.5">
@@ -655,6 +773,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           emptyMessage="No attempts recorded yet. Start the Python assessment to earn your verified badge."
         />
       </div>
+
+      {/* Onboarding Modal */}
+      <OnboardingModal
+        isOpen={showOnboarding}
+        onClose={() => {
+          setShowOnboarding(false);
+          setOnboardingDismissed(true);
+        }}
+        onCompleted={async () => {
+          await refreshUser();
+          await fetchAll();
+        }}
+        onStartAssessment={(skillName, level) => {
+          setShowOnboarding(false);
+          setAssessingSkill({ skillName, level });
+        }}
+      />
+
+      {/* Gemini Skill Verification Modal */}
+      {assessingSkill && (
+        <SkillAssessmentModal
+          skillName={assessingSkill.skillName}
+          level={assessingSkill.level}
+          isOpen={Boolean(assessingSkill)}
+          onClose={() => setAssessingSkill(null)}
+          onAssessmentCompleted={async () => {
+            await refreshUser();
+            await fetchAll();
+          }}
+        />
+      )}
     </div>
   );
 };

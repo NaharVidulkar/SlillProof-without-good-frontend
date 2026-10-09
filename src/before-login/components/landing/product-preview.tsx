@@ -91,7 +91,7 @@ export function ProductPreview() {
                   <span className="size-2.5 rounded-full bg-[#e3e2dc]" />
                 </div>
                 <div className="mx-auto flex h-6 w-full max-w-xs items-center justify-center gap-1.5 rounded-md bg-black/[0.04] font-mono text-[11px] text-muted-foreground">
-                  app.skillprof.dev/overview
+                  app.skillproof.dev/overview
                 </div>
                 <span className="hidden font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground sm:block">
                   Demo

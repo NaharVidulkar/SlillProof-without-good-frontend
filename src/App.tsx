@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { AppShell } from './components/layout/AppShell.tsx';
 import { NavTabId } from './components/layout/Sidebar.tsx';
 import { DashboardView } from './components/DashboardView.tsx';
@@ -83,7 +83,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', handleUrlSync);
   }, []);
 
-  const handleTabChange = (tab: NavTabId) => {
+  const handleTabChange = useCallback((tab: NavTabId) => {
     setActiveTab(tab);
     window.history.pushState(null, '', `/${tab}`);
     // If navigating away from assessments, ensure attempt mode is exited
@@ -91,7 +91,30 @@ export default function App() {
       setIsAttemptMode(false);
       setCurrentAttemptId(null);
     }
-  };
+  }, []);
+
+  const handleNavigateToAssessments = useCallback(() => {
+    handleTabChange('assessments');
+  }, [handleTabChange]);
+
+  const handleNavigateToSkills = useCallback(() => {
+    handleTabChange('skills');
+  }, [handleTabChange]);
+
+  const handleNavigateToProfile = useCallback(() => {
+    handleTabChange('profile');
+  }, [handleTabChange]);
+
+  const handleNavigateToPassport = useCallback(() => {
+    handleTabChange('passport');
+  }, [handleTabChange]);
+
+  const handleOpenAttempt = useCallback((attId: string) => {
+    setCurrentAttemptId(attId);
+    setCurrentSubView('attempt');
+    setActiveTab('assessments');
+    window.history.pushState(null, '', `/assessments/${currentAssessmentId}/attempt/${attId}`);
+  }, [currentAssessmentId, handleTabChange]);
 
   return (
     <AppShell
@@ -102,15 +125,10 @@ export default function App() {
     >
       {activeTab === 'dashboard' && (
         <DashboardView
-          onNavigateToAssessments={() => handleTabChange('assessments')}
-          onNavigateToSkills={() => handleTabChange('skills')}
-          onNavigateToProfile={() => handleTabChange('profile')}
-          onOpenAttempt={(attId) => {
-            setCurrentAttemptId(attId);
-            setCurrentSubView('attempt');
-            setActiveTab('assessments');
-            window.history.pushState(null, '', `/assessments/${currentAssessmentId}/attempt/${attId}`);
-          }}
+          onNavigateToAssessments={handleNavigateToAssessments}
+          onNavigateToSkills={handleNavigateToSkills}
+          onNavigateToProfile={handleNavigateToProfile}
+          onOpenAttempt={handleOpenAttempt}
           onUpdateRightPanel={setDashboardRightPanel}
         />
       )}
@@ -121,20 +139,20 @@ export default function App() {
           initialAttemptId={currentAttemptId}
           initialAssessmentId={currentAssessmentId}
           initialSubView={currentSubView}
-          onNavigateToPassport={() => handleTabChange('passport')}
+          onNavigateToPassport={handleNavigateToPassport}
           onAttemptModeChange={setIsAttemptMode}
         />
       )}
 
       {activeTab === 'skills' && (
         <SkillsView
-          onNavigateToAssessments={() => handleTabChange('assessments')}
+          onNavigateToAssessments={handleNavigateToAssessments}
         />
       )}
 
       {activeTab === 'job-match' && (
         <JobMatchView
-          onNavigateToAssessments={() => handleTabChange('assessments')}
+          onNavigateToAssessments={handleNavigateToAssessments}
         />
       )}
 
@@ -145,8 +163,7 @@ export default function App() {
       {activeTab === 'profile' && (
         <ProfileView
           onSignOut={() => {
-            handleTabChange('dashboard');
-            window.location.reload();
+            window.location.href = '/';
           }}
         />
       )}

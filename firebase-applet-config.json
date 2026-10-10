@@ -1,12 +1,12 @@
 {
   "projectId": "fir-99a3e",
-  "appId": "1:593065284803:web:53202215eddebc654abe76",
+  "appId": "1:593065284803:web:d75537bbfdd54e7a4abe76",
   "apiKey": "AIzaSyBQHM3G1dTDamzopwaCDcvm0K-6rpjUFMQ",
   "authDomain": "fir-99a3e.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
+  "firestoreDatabaseId": "ai-studio-skillproof-ae704732-a00f-4633-b10f-42ca267ebfaa",
   "storageBucket": "fir-99a3e.firebasestorage.app",
   "messagingSenderId": "593065284803",
   "measurementId": "",
-  "oAuthClientId": "",
+  "oAuthClientId": "593065284803-unvnict1veeqpmr5fgc0s4oad9mmoo0v.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

@@ -867,32 +867,44 @@ export const AssessmentAttemptView: React.FC<AssessmentAttemptViewProps> = ({
                   {/* Monaco Editor Container */}
                   <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
                     <div className="bg-slate-100 px-4 py-2 border-b border-slate-200 flex items-center justify-between text-xs">
-                      <div className="flex items-center space-x-2">
-                        <Terminal className="w-3.5 h-3.5 text-slate-500" />
-                        <span className="font-mono text-slate-700 font-medium">solution.py</span>
-                      </div>
+                      {(() => {
+                        const codeLang = (activeCode as any).language || (activeCode.starterCode?.java ? 'java' : (activeCode.starterCode as any)?.javascript ? 'javascript' : 'python');
+                        const codeFileName = codeLang === 'java' ? 'Main.java' : codeLang === 'javascript' ? 'solution.js' : 'solution.py';
+                        return (
+                          <div className="flex items-center space-x-2">
+                            <Terminal className="w-3.5 h-3.5 text-slate-500" />
+                            <span className="font-mono text-slate-700 font-medium">{codeFileName}</span>
+                          </div>
+                        );
+                      })()}
                       <span className="text-[11px] text-slate-400">Autosaves continuously</span>
                     </div>
 
                     <div className="h-[380px] w-full">
-                      <Editor
-                        height="100%"
-                        language="python"
-                        value={currentAnswer?.code ?? activeCode.starterCode.python}
-                        onChange={(value) => handleCodeChange(activeCode.id, value || '')}
-                        onMount={(editor) => {
-                          editorRef.current = editor;
-                        }}
-                        options={{
-                          fontSize: 13,
-                          lineNumbers: 'on',
-                          minimap: { enabled: false },
-                          scrollBeyondLastLine: false,
-                          automaticLayout: true,
-                          tabSize: 4,
-                          insertSpaces: true,
-                        }}
-                      />
+                      {(() => {
+                        const codeLang = (activeCode as any).language || (activeCode.starterCode?.java ? 'java' : (activeCode.starterCode as any)?.javascript ? 'javascript' : 'python');
+                        const initialStarterCode = (activeCode as any).starter_code || (activeCode.starterCode as any)?.[codeLang] || activeCode.starterCode?.python || '';
+                        return (
+                          <Editor
+                            height="100%"
+                            language={codeLang === 'java' ? 'java' : codeLang === 'javascript' ? 'javascript' : 'python'}
+                            value={currentAnswer?.code ?? initialStarterCode}
+                            onChange={(value) => handleCodeChange(activeCode.id, value || '')}
+                            onMount={(editor) => {
+                              editorRef.current = editor;
+                            }}
+                            options={{
+                              fontSize: 13,
+                              lineNumbers: 'on',
+                              minimap: { enabled: false },
+                              scrollBeyondLastLine: false,
+                              automaticLayout: true,
+                              tabSize: 4,
+                              insertSpaces: true,
+                            }}
+                          />
+                        );
+                      })()}
                     </div>
 
                     {/* Editor Action Bar */}

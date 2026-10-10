@@ -41,6 +41,14 @@ service cloud.firestore {
         // Scores, status transitions, question IDs and attempts are strictly server-controlled
         allow write: if false;
       }
+
+      // CV analysis subcollection
+      match /analysis/{analysisId} {
+        // Users can read and list their own analysis
+        allow get, list: if isValidId(userId) && isValidId(analysisId) && isOwner(userId);
+        // Analysis is written by the server
+        allow write: if false;
+      }
     }
 
     // Question banks, answer keys, and test cases are strictly server-only

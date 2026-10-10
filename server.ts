@@ -12,6 +12,15 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { adminAuth, adminDb, FieldValue, DecodedIdToken, firebaseConfig } from './lib/server/firebase-admin.ts';
 import {
+  getUserRecord,
+  saveUserRecord,
+  syncSectionToFirestore,
+  isFirestoreAdminAvailable,
+  saveAnalysisRecord,
+  getLatestAnalysisRecord,
+} from './lib/server/user-repo.ts';
+import { analyseCv } from './lib/server/cv-analyser.ts';
+import {
   getAllPublicProblems,
   getPublicProblemById,
   getProblemByIdWithHidden,
@@ -311,34 +320,32 @@ async function startServer() {
       path: '/',
     });
 
-    // Step 3: Upsert Firestore users/{uid} document (failure must not fail session creation)
+    // Step 3: Upsert users/{uid} document in store (and sync to Firestore if permitted)
     try {
-      const userDocRef = adminDb.collection('users').doc(decodedToken.uid);
-      const userSnapshot = await userDocRef.get();
-
-      if (!userSnapshot.exists) {
-        await userDocRef.set({
+      const existingUser = await getUserRecord(decodedToken.uid);
+      if (!existingUser) {
+        await saveUserRecord(decodedToken.uid, {
           uid: decodedToken.uid,
           email: decodedToken.email || '',
           name: decodedToken.name || decodedToken.email?.split('@')[0] || 'Candidate',
           photoURL: decodedToken.picture || '',
           role: 'student',
           provider: decodedToken.firebase?.sign_in_provider || 'password',
-          createdAt: FieldValue.serverTimestamp(),
-          lastLoginAt: FieldValue.serverTimestamp(),
+          createdAt: new Date().toISOString(),
+          lastLoginAt: new Date().toISOString(),
           onboardingCompleted: false,
           onboardingSkipped: false,
           passportPublic: false,
         });
-        console.log(`[Auth] Created Firestore users document for ${decodedToken.uid}`);
+        console.log(`[Auth] Initialized user record for ${decodedToken.uid}`);
       } else {
-        await userDocRef.update({
-          lastLoginAt: FieldValue.serverTimestamp(),
+        await saveUserRecord(decodedToken.uid, {
+          lastLoginAt: new Date().toISOString(),
         });
-        console.log(`[Auth] Updated Firestore users lastLoginAt for ${decodedToken.uid}`);
+        console.log(`[Auth] Updated user lastLoginAt for ${decodedToken.uid}`);
       }
-    } catch (fsErr) {
-      console.warn('[Auth] Firestore user document creation error (non-fatal, client also syncs):', fsErr);
+    } catch (authErr) {
+      console.warn('[Auth] User document sync warning (non-fatal, client also syncs):', authErr);
     }
 
     return res.json({
@@ -390,16 +397,15 @@ async function startServer() {
     let skills: any[] = [];
 
     try {
-      const userDoc = await adminDb.collection('users').doc(sessionUser.uid).get();
-      if (userDoc.exists) {
-        const udata = userDoc.data();
-        onboardingCompleted = Boolean(udata?.onboardingCompleted);
-        onboardingSkipped = Boolean(udata?.onboardingSkipped);
-        profile = udata?.profile || null;
-        skills = udata?.skills || [];
+      const userRecord = await getUserRecord(sessionUser.uid);
+      if (userRecord) {
+        onboardingCompleted = Boolean(userRecord.onboardingCompleted);
+        onboardingSkipped = Boolean(userRecord.onboardingSkipped);
+        profile = userRecord.profile || null;
+        skills = userRecord.skills || [];
       }
-    } catch (fsErr) {
-      console.error('[Auth] Error fetching user doc in /api/me:', fsErr);
+    } catch (err) {
+      console.error('[Auth] Error fetching user doc in /api/me:', err);
     }
 
     return res.json({
@@ -427,12 +433,7 @@ async function startServer() {
 
   // GET /api/health: System and external integration health check
   app.get('/api/health', async (_req, res) => {
-    let firestoreOk = true;
-    try {
-      await adminDb.collection('_health').doc('ping').set({ ts: FieldValue.serverTimestamp() }, { merge: true });
-    } catch {
-      firestoreOk = false;
-    }
+    const firestoreOk = await isFirestoreAdminAvailable();
 
     const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
     const compilerConfigured = Boolean(process.env.ONLINECOMPILER_API_KEY && process.env.ONLINECOMPILER_API_KEY !== 'MY_ONLINECOMPILER_API_KEY');
@@ -446,21 +447,24 @@ async function startServer() {
     });
   });
 
-  // POST /api/onboarding/parse-resume: Extract candidate profile and skills via Gemini with retry & limits
-  app.post('/api/onboarding/parse-resume', async (req, res) => {
+  // Shared handler for CV analysis (used by both /api/cv/analyse and /api/onboarding/parse-resume)
+  async function handleCvAnalysis(req: express.Request, res: express.Response) {
     try {
       const sessionUser = await verifySession(req);
-      const uid = sessionUser?.uid || DEMO_USER_ID;
+      if (!sessionUser) {
+        return res.status(401).json({ error: 'Unauthorized: Please sign in to analyze your CV' });
+      }
+      const uid = sessionUser.uid;
 
-      // Rate limit check: max 3 resume parses per day
+      // Rate limit check: max 5 CV analyses per user per day
       const limitCheck = await checkAndIncrementResumeParse(uid);
       if (!limitCheck.ok) {
         return res.status(429).json({ error: limitCheck.reason });
       }
 
       const { fileData, fileName, mimeType, textContent } = req.body || {};
-      if (!fileData && !textContent) {
-        return res.status(400).json({ error: 'No resume file data or text content provided' });
+      if (!fileData && (!textContent || !String(textContent).trim())) {
+        return res.status(400).json({ error: 'Empty file or text content provided. Please upload a valid CV document.' });
       }
 
       // 5 MB cap
@@ -468,21 +472,90 @@ async function startServer() {
         return res.status(400).json({ error: 'File size exceeds the 5 MB maximum limit' });
       }
 
-      console.log(`[Onboarding] Parsing resume with Gemini for user ${uid} (${fileName || 'text'})...`);
-      const profile = await parseResumeWithGemini({
+      console.log(`[CV Analysis] Starting CV analysis for user ${uid} (${fileName || 'pasted text'})...`);
+      const analysis = await analyseCv({
         fileData,
         fileName,
         mimeType: mimeType || 'application/pdf',
-        textContent,
+        textContent: textContent ? String(textContent).trim() : undefined,
       });
 
-      return res.json({ ok: true, profile });
-    } catch (err: unknown) {
-      console.error('[Onboarding] parse-resume failed:', err);
-      return res.status(500).json({
-        error: 'Failed to parse resume document',
-        message: err instanceof Error ? err.message : String(err),
+      // 1. Save structured result to users/{uid}/analysis/latest with timestamp
+      await saveAnalysisRecord(uid, analysis);
+
+      // 2. Initialize personalized assessment sections for up to 6 detected skills (replace previous cards)
+      const { activeSections, laterSkills } = await initializeUserSections(uid, analysis.skills, true);
+
+      // 3. Persist profile and skills in user record
+      try {
+        await saveUserRecord(uid, {
+          onboardingCompleted: true,
+          onboardingSkipped: false,
+          profile: {
+            role: analysis.fieldOrRole,
+            summary: analysis.summary,
+            fieldOfStudy: 'Computer Science',
+            yearsOfExperience: 1,
+          },
+          skills: analysis.skills.map((s) => ({
+            name: s.name,
+            slug: s.slug,
+            category: s.category,
+            level: s.claimedLevel,
+            verified: false,
+          })),
+        });
+      } catch (saveErr) {
+        console.warn('[CV Analysis] User record save warning (non-fatal):', saveErr);
+      }
+
+      console.log(`[CV Analysis] Completed for ${uid}: ${analysis.skills.length} skills extracted and saved.`);
+
+      return res.json({
+        ok: true,
+        analysis,
+        sections: activeSections,
+        laterSkills,
+        // Compatibility with onboarding modal
+        profile: {
+          role: analysis.fieldOrRole,
+          summary: analysis.summary,
+          fieldOfStudy: 'Computer Science',
+          yearsOfExperience: 1,
+          skills: analysis.skills,
+          fallbackUsed: analysis.source === 'gemini_fallback',
+        },
       });
+    } catch (err: unknown) {
+      console.error('[CV Analysis] Error during analysis:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return res.status(500).json({
+        error: errMsg || 'Failed to analyze CV. Please try again or enter your skills manually.',
+        fallbackManual: true,
+      });
+    }
+  }
+
+  // POST /api/cv/analyse (requireAuth): Primary CV analysis route
+  app.post('/api/cv/analyse', handleCvAnalysis);
+
+  // POST /api/onboarding/parse-resume: Backward-compatible alias for existing onboarding modal
+  app.post('/api/onboarding/parse-resume', handleCvAnalysis);
+
+  // GET /api/cv/analysis/latest: Retrieve latest structured analysis for the signed-in user
+  app.get('/api/cv/analysis/latest', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      if (!sessionUser) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const uid = sessionUser.uid;
+
+      const analysis = await getLatestAnalysisRecord(uid);
+      return res.json({ ok: true, analysis: analysis || null });
+    } catch (err: unknown) {
+      console.error('[CV Analysis] Error retrieving latest analysis:', err);
+      return res.status(500).json({ error: 'Failed to retrieve CV analysis' });
     }
   });
 
@@ -528,33 +601,29 @@ async function startServer() {
       // Initialize one section per skill (capped at 6 active, remainder as laterSkills)
       const { activeSections, laterSkills } = await initializeUserSections(uid, rawSkills);
 
-      // Persist user profile to Firestore
+      // Persist user profile to store (and mirror to Firestore if available)
       try {
-        await adminDb.collection('users').doc(uid).set(
-          {
-            onboardingCompleted: true,
-            onboardingSkipped: false,
-            profile: profileData,
-            skills: activeSections.map((sec) => ({
-              name: sec.skillName,
-              slug: sec.skillSlug,
-              category: sec.category,
-              level: sec.claimedLevel,
-              verified: false,
-            })),
-            laterSkills: laterSkills.map((ls) => ({
-              name: ls.name,
-              slug: ls.slug,
-              category: ls.category,
-              level: ls.claimedLevel,
-            })),
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
+        await saveUserRecord(uid, {
+          onboardingCompleted: true,
+          onboardingSkipped: false,
+          profile: profileData,
+          skills: activeSections.map((sec) => ({
+            name: sec.skillName,
+            slug: sec.skillSlug,
+            category: sec.category,
+            level: sec.claimedLevel,
+            verified: false,
+          })),
+          laterSkills: laterSkills.map((ls) => ({
+            name: ls.name,
+            slug: ls.slug,
+            category: ls.category,
+            level: ls.claimedLevel,
+          })),
+        });
         console.log(`[Onboarding] Completed for ${uid}: initialized ${activeSections.length} sections, ${laterSkills.length} for later.`);
       } catch (fsErr) {
-        console.warn('[Onboarding] Firestore profile write error (non-fatal):', fsErr);
+        console.warn('[Onboarding] Profile write warning (non-fatal):', fsErr);
       }
 
       return res.json({
@@ -577,20 +646,14 @@ async function startServer() {
       const uid = sessionUser?.uid || DEMO_USER_ID;
 
       try {
-        await adminDb.collection('users').doc(uid).set(
-          {
-            onboardingSkipped: true,
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
+        await saveUserRecord(uid, {
+          onboardingSkipped: true,
+        });
       } catch (fsErr) {
-        console.warn('[Onboarding] Firestore skip write error:', fsErr);
+        console.warn('[Onboarding] Skip write warning (non-fatal):', fsErr);
       }
 
-      // Ensure Python section exists so the user has immediate access
-      await initializeUserSections(uid, [{ name: 'Python', level: 'Intermediate' }]);
-
+      // Record skip preference without forcing hardcoded skills
       return res.json({ ok: true, skipped: true });
     } catch (err: unknown) {
       console.error('[Onboarding] skip failed:', err);
@@ -606,21 +669,23 @@ async function startServer() {
 
       let sections = await getUserSections(uid);
 
-      // If user has no sections yet, check if they have confirmed skills in profile or initialize Python
+      // If user has no sections yet, check if they have confirmed skills in profile or latest analysis
       if (sections.length === 0) {
         let skillsFromProfile: any[] = [];
         try {
-          const doc = await adminDb.collection('users').doc(uid).get();
-          if (doc.exists) {
-            skillsFromProfile = doc.data()?.skills || [];
+          const analysisRec = await getLatestAnalysisRecord(uid);
+          if (analysisRec?.skills && analysisRec.skills.length > 0) {
+            skillsFromProfile = analysisRec.skills;
+          } else {
+            const userRec = await getUserRecord(uid);
+            if (userRec?.skills && userRec.skills.length > 0) {
+              skillsFromProfile = userRec.skills;
+            }
           }
         } catch {}
 
         if (skillsFromProfile.length > 0) {
           const initRes = await initializeUserSections(uid, skillsFromProfile);
-          sections = initRes.activeSections;
-        } else {
-          const initRes = await initializeUserSections(uid, [{ name: 'Python', level: 'Intermediate' }]);
           sections = initRes.activeSections;
         }
       }
@@ -628,9 +693,9 @@ async function startServer() {
       // Read laterSkills
       let laterSkills: any[] = [];
       try {
-        const doc = await adminDb.collection('users').doc(uid).get();
-        if (doc.exists) {
-          laterSkills = doc.data()?.laterSkills || [];
+        const userRec = await getUserRecord(uid);
+        if (userRec?.laterSkills) {
+          laterSkills = userRec.laterSkills;
         }
       } catch {}
 
@@ -703,12 +768,11 @@ async function startServer() {
       section.updatedAt = new Date().toISOString();
       await store.put('user_sections', sectionKey, section);
 
-      // Async non-blocking Firestore update
+      // Async non-blocking Firestore update if available
       try {
-        await adminDb.collection('users').doc(uid).collection('assessmentSections').doc(skillSlug).update({
+        await syncSectionToFirestore(uid, skillSlug, {
           status: section.status,
           currentQuestionIndex: section.currentQuestionIndex,
-          updatedAt: FieldValue.serverTimestamp(),
         });
       } catch {}
 
@@ -833,57 +897,51 @@ async function startServer() {
       };
       await store.put('skill_evidence', evidenceItem.id, evidenceItem);
 
-      // Persist verified skill to user profile in Firestore
+      // Persist verified skill to user profile in store (and sync to Firestore if permitted)
       try {
-        const userRef = adminDb.collection('users').doc(uid);
-        const userDoc = await userRef.get();
-        if (userDoc.exists) {
-          const udata = userDoc.data();
-          const existingSkills = Array.isArray(udata?.skills) ? udata.skills : [];
-          const updatedSkills = existingSkills.map((s: any) => {
-            if (s.slug === skillSlug || s.name.toLowerCase() === section.skillName.toLowerCase()) {
-              return {
-                ...s,
-                verified: score >= 70,
-                score,
-                tier: badgeLabel,
-                verifiedAt: section.completedAt,
-              };
-            }
-            return s;
-          });
-
-          if (!updatedSkills.some((s: any) => s.slug === skillSlug || s.name.toLowerCase() === section.skillName.toLowerCase())) {
-            updatedSkills.push({
-              name: section.skillName,
-              slug: skillSlug,
-              level: section.claimedLevel,
+        const userRec = await getUserRecord(uid);
+        const existingSkills = Array.isArray(userRec?.skills) ? userRec.skills : [];
+        const updatedSkills = existingSkills.map((s: any) => {
+          if (s.slug === skillSlug || s.name.toLowerCase() === section.skillName.toLowerCase()) {
+            return {
+              ...s,
               verified: score >= 70,
               score,
               tier: badgeLabel,
               verifiedAt: section.completedAt,
-            });
+            };
           }
+          return s;
+        });
 
-          await userRef.update({
-            skills: updatedSkills,
-            lastAssessmentScore: score,
-            lastAssessmentBadge: badgeLabel,
-            updatedAt: FieldValue.serverTimestamp(),
+        if (!updatedSkills.some((s: any) => s.slug === skillSlug || s.name.toLowerCase() === section.skillName.toLowerCase())) {
+          updatedSkills.push({
+            name: section.skillName,
+            slug: skillSlug,
+            level: section.claimedLevel,
+            verified: score >= 70,
+            score,
+            tier: badgeLabel,
+            verifiedAt: section.completedAt,
           });
         }
 
-        // Also update subcollection
-        await adminDb.collection('users').doc(uid).collection('assessmentSections').doc(skillSlug).update({
+        await saveUserRecord(uid, {
+          skills: updatedSkills,
+          lastAssessmentScore: score,
+          lastAssessmentBadge: badgeLabel,
+        });
+
+        // Also update subcollection if Firestore is available
+        await syncSectionToFirestore(uid, skillSlug, {
           status: 'completed',
           score,
           badgeLabel,
           attempts: section.attempts,
-          completedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
+          completedAt: section.completedAt,
         });
-      } catch (fsErr) {
-        console.warn('[Sections] Firestore submit update warning (non-fatal):', fsErr);
+      } catch (submitErr) {
+        console.warn('[Sections] Submit profile update warning (non-fatal):', submitErr);
       }
 
       return res.json({
@@ -1050,23 +1108,19 @@ async function startServer() {
         }
       }
 
-      // 2. Reset user profile in Firestore
+      // 2. Reset user profile in store (and sync to Firestore if permitted)
       try {
-        await adminDb.collection('users').doc(uid).set(
-          {
-            onboardingCompleted: false,
-            onboardingSkipped: false,
-            profile: null,
-            skills: [],
-            laterSkills: [],
-            lastAssessmentScore: null,
-            lastAssessmentBadge: null,
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-      } catch (fsErr) {
-        console.warn('[Privacy] Firestore reset error:', fsErr);
+        await saveUserRecord(uid, {
+          onboardingCompleted: false,
+          onboardingSkipped: false,
+          profile: null,
+          skills: [],
+          laterSkills: [],
+          lastAssessmentScore: null,
+          lastAssessmentBadge: null,
+        });
+      } catch (resetErr) {
+        console.warn('[Privacy] Profile reset warning:', resetErr);
       }
 
       return res.json({ ok: true, message: 'All assessment records, sections, and profile data have been deleted.' });
@@ -1189,32 +1243,28 @@ async function startServer() {
 
       // Persist verified skill to Firestore user document
       try {
-        const userRef = adminDb.collection('users').doc(uid);
-        const userDoc = await userRef.get();
-        if (userDoc.exists) {
-          const udata = userDoc.data();
-          const existingSkills = Array.isArray(udata?.skills) ? udata.skills : [];
-          const updatedSkills = existingSkills.map((s: any) => {
-            if (s.name.toLowerCase() === assessment.skillName.toLowerCase()) {
-              return { ...s, verified: true, score, tier, verifiedAt: new Date().toISOString() };
-            }
-            return s;
-          });
-          // If skill was not in list, add it
-          if (!updatedSkills.some((s: any) => s.name.toLowerCase() === assessment.skillName.toLowerCase())) {
-            updatedSkills.push({
-              name: assessment.skillName,
-              level: tier,
-              verified: true,
-              score,
-              tier,
-              verifiedAt: new Date().toISOString(),
-            });
+        const userRec = await getUserRecord(uid);
+        const existingSkills = Array.isArray(userRec?.skills) ? userRec.skills : [];
+        const updatedSkills = existingSkills.map((s: any) => {
+          if (s.name.toLowerCase() === assessment.skillName.toLowerCase()) {
+            return { ...s, verified: true, score, tier, verifiedAt: new Date().toISOString() };
           }
-          await userRef.update({ skills: updatedSkills });
+          return s;
+        });
+        // If skill was not in list, add it
+        if (!updatedSkills.some((s: any) => s.name.toLowerCase() === assessment.skillName.toLowerCase())) {
+          updatedSkills.push({
+            name: assessment.skillName,
+            level: tier,
+            verified: true,
+            score,
+            tier,
+            verifiedAt: new Date().toISOString(),
+          });
         }
-      } catch (fsErr) {
-        console.error('[Assessment] Firestore update error (non-fatal):', fsErr);
+        await saveUserRecord(uid, { skills: updatedSkills });
+      } catch (saveErr) {
+        console.warn('[Assessment] Profile update warning (non-fatal):', saveErr);
       }
 
       return res.json({

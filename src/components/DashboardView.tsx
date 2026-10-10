@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   RefreshCw,
   AlertCircle,
@@ -12,22 +12,24 @@ import {
   Award,
   CheckCircle2,
   Clock,
-  Zap,
   Sparkles,
   FileText,
+  Lock,
+  Code,
+  Layers,
+  ArrowRight,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
-import { OnboardingModal } from './onboarding/OnboardingModal.tsx';
-import { SkillAssessmentModal } from './onboarding/SkillAssessmentModal.tsx';
 import { clientApi } from '../../lib/client/api.ts';
 import { DashboardData, SkillMetric } from '../../lib/types.ts';
 import {
   AssessmentAttempt,
   AssessmentResult,
   PublicAssessmentDetail,
+  PublicAssessmentSummary,
 } from '../../lib/server/assessments/types.ts';
 import { Banner, BannerState } from './ui/Banner.tsx';
-import { GradientCard } from './ui/GradientCard.tsx';
 import { DataTable, Column } from './ui/DataTable.tsx';
 import { LevelBadge } from './ui/LevelBadge.tsx';
 import { ConfidenceRing } from './ui/ConfidenceRing.tsx';
@@ -49,8 +51,62 @@ const PYTHON_CANONICAL_SKILLS = [
   { id: 'py.tooling', name: 'Python Tooling', description: 'Modules, imports, virtual environments & runtime typing' },
 ];
 
+export interface FixedAssessmentCardConfig {
+  id: string;
+  title: string;
+  shortDescription: string;
+  questionsCount: string;
+  format: string;
+  requiresAuth: boolean;
+  accentBadge: string;
+  accentBg: string;
+}
+
+export const FIXED_ASSESSMENTS: FixedAssessmentCardConfig[] = [
+  {
+    id: 'python-fundamentals',
+    title: 'Python',
+    shortDescription: 'Evidence-based verification of core Python internals, data structures, algorithms, and real-life systems.',
+    questionsCount: '25 questions',
+    format: 'MCQ + coding',
+    requiresAuth: false,
+    accentBadge: 'bg-emerald-100 text-emerald-800',
+    accentBg: 'from-emerald-500/10 to-teal-500/5',
+  },
+  {
+    id: 'java',
+    title: 'Java',
+    shortDescription: 'Core Java: syntax, OOP, strings, collections, exceptions, streams and problem solving.',
+    questionsCount: '25 questions',
+    format: 'MCQ + coding',
+    requiresAuth: true,
+    accentBadge: 'bg-amber-100 text-amber-800',
+    accentBg: 'from-amber-500/10 to-orange-500/5',
+  },
+  {
+    id: 'dsa',
+    title: 'Data Structures and Algorithms',
+    shortDescription: 'Complexity, arrays, strings, linked lists, stacks, queues, hashing, trees, heaps, graphs, sorting and searching, and dynamic programming.',
+    questionsCount: '25 questions',
+    format: 'MCQ + coding',
+    requiresAuth: true,
+    accentBadge: 'bg-purple-100 text-purple-800',
+    accentBg: 'from-purple-500/10 to-indigo-500/5',
+  },
+  {
+    id: 'frontend-dev',
+    title: 'Front-end Development',
+    shortDescription: 'HTML semantics and accessibility, CSS layout and specificity, modern JavaScript, the event loop, React basics and browser fundamentals.',
+    questionsCount: '25 questions',
+    format: 'MCQ + coding',
+    requiresAuth: true,
+    accentBadge: 'bg-blue-100 text-blue-800',
+    accentBg: 'from-blue-500/10 to-cyan-500/5',
+  },
+];
+
 export interface DashboardViewProps {
-  onNavigateToAssessments: () => void;
+  onNavigateToAssessments: (assessmentId?: string) => void;
   onNavigateToSkills: () => void;
   onNavigateToProfile: () => void;
   onOpenAttempt?: (attemptId: string) => void;
@@ -66,62 +122,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenResult,
   onUpdateRightPanel,
 }) => {
-  const { user, refresh: refreshUser } = useAuth();
+  const { user } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [assessmentDetail, setAssessmentDetail] = useState<PublicAssessmentDetail | null>(null);
-  const [currentAttempt, setCurrentAttempt] = useState<AssessmentAttempt | null>(null);
-  const [lastResult, setLastResult] = useState<AssessmentResult | null>(null);
+  const [assessmentsList, setAssessmentsList] = useState<PublicAssessmentSummary[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
-  const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(false);
-  const [assessingSkill, setAssessingSkill] = useState<{ skillName: string; level: string } | null>(null);
+  // Friendly "CV analysis coming soon" modal state
+  const [showCvComingSoonModal, setShowCvComingSoonModal] = useState<boolean>(false);
 
-  // Automatically prompt onboarding if user is logged in and onboardingCompleted is not true
-  useEffect(() => {
-    if (user && user.onboardingCompleted === false && !user.onboardingSkipped && !onboardingDismissed) {
-      setShowOnboarding(true);
-    }
-  }, [user, onboardingDismissed]);
+  // Visitor sign-in requirement modal state
+  const [signInPromptCard, setSignInPromptCard] = useState<FixedAssessmentCardConfig | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [dash, detail] = await Promise.all([
-        clientApi.getDashboard(),
-        clientApi.getAssessmentDetail('python-fundamentals'),
+      const [dash, detail, allAssessments] = await Promise.all([
+        clientApi.getDashboard().catch(() => null),
+        clientApi.getAssessmentDetail('python-fundamentals').catch(() => null),
+        clientApi.getAssessments().catch(() => []),
       ]);
 
       setDashboardData(dash);
       setAssessmentDetail(detail);
-
-      // If there's an in-progress attempt, fetch its details
-      if (detail.inProgressAttemptId) {
-        try {
-          const att = await clientApi.getAttempt(detail.inProgressAttemptId);
-          setCurrentAttempt(att);
-        } catch {
-          setCurrentAttempt(null);
-        }
-      } else {
-        setCurrentAttempt(null);
-      }
-
-      // If there's a last result, try fetching its full result details
-      if (detail.lastResult?.recordId) {
-        try {
-          // Check attempt result
-          const attempts = await clientApi.getDashboard();
-          const lastActivity = attempts.recentActivity.find((a) => a.type === 'assessment');
-          if (lastActivity) {
-            // Find completed attempt result if available
-          }
-        } catch {
-          // ignore
-        }
-      }
+      setAssessmentsList(allAssessments || []);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
     } finally {
@@ -146,35 +172,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const remainingTimeText = useMemo(() => {
     if (!assessmentDetail?.remainingSeconds) return undefined;
-    const mins = Math.floor(assessmentDetail.remainingSeconds / 60);
-    const secs = assessmentDetail.remainingSeconds % 60;
-    if (mins >= 60) {
-      const hrs = Math.floor(mins / 60);
-      const remMins = mins % 60;
-      return `${hrs}h ${remMins}m`;
-    }
-    return `${mins}m ${secs}s`;
+    const m = Math.floor(assessmentDetail.remainingSeconds / 60);
+    const s = assessmentDetail.remainingSeconds % 60;
+    return `${m}m ${s}s`;
   }, [assessmentDetail?.remainingSeconds]);
 
-  // Calculate Section Answered counts from active attempt
-  const sectionCounts = useMemo(() => {
-    const answers = currentAttempt?.answers || {};
-    let secA = 0;
-    let secB = 0;
-    let secC = 0;
+  const handleBannerAction = () => {
+    onNavigateToAssessments('python-fundamentals');
+  };
 
-    Object.entries(answers).forEach(([qid, ans]) => {
-      const isAnswered = Boolean(ans.choiceId || (ans.code && ans.code.trim().length > 10));
-      if (!isAnswered) return;
-      if (qid.startsWith('A')) secA++;
-      else if (qid.startsWith('B')) secB++;
-      else if (qid.startsWith('C')) secC++;
-    });
+  const handleStartCard = (card: FixedAssessmentCardConfig) => {
+    if (card.requiresAuth && !user) {
+      // Visitor rule: signed-out visitors can only take Python test
+      setSignInPromptCard(card);
+      return;
+    }
+    onNavigateToAssessments(card.id);
+  };
 
-    return { secA, secB, secC };
-  }, [currentAttempt]);
-
-  // Combine evaluated skills with the 10 Python skills
+  // Canonical skill matrix
   const displaySkills = useMemo(() => {
     const evaluatedMap = new Map<string, SkillMetric>();
     if (dashboardData?.skills) {
@@ -192,387 +208,155 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           confidenceScore: ev.confidenceScore,
           tier: ev.tier,
           evidenceCount: ev.evidenceCount,
-          lastVerified: 'Recently verified',
+          lastVerified: ev.lastVerified,
           isEvidenced: true,
         };
       }
       return {
         id: canon.id,
         name: canon.name,
-        level: 'Novice' as const,
+        level: 'Foundation' as const,
         confidence: 'Low' as const,
         confidenceScore: 0.2,
-        tier: 'Claimed' as const,
+        tier: 'Unverified' as const,
         evidenceCount: 0,
-        lastVerified: '—',
+        lastVerified: 'Not verified yet',
         isEvidenced: false,
       };
-    }).slice(0, 5); // Show top 5 rows on dashboard as per spec
-  }, [dashboardData?.skills]);
+    });
+  }, [dashboardData]);
 
-  // Compute Calendar Events from real data
-  const calendarEvents: CalendarEvent[] = useMemo(() => {
-    const events: CalendarEvent[] = [];
-
-    // Recent activity dates
-    if (dashboardData?.recentActivity) {
-      dashboardData.recentActivity.forEach((act) => {
-        events.push({
-          date: act.date,
-          title: `${act.title} (${act.score}%)`,
-          type: 'attempt_finished',
-        });
-      });
-    }
-
-    // Badge issue & expiry dates
-    if (assessmentDetail?.lastResult?.completedAt) {
-      const issued = new Date(assessmentDetail.lastResult.completedAt);
-      events.push({
-        date: issued.toISOString(),
-        title: `Badge Issued: ${assessmentDetail.lastResult.badgeLabel} (${assessmentDetail.lastResult.overallPercent}%)`,
-        type: 'badge_issued',
-      });
-
-      // Expiry (12 months later)
-      const expiry = new Date(issued.getTime() + 365 * 24 * 60 * 60 * 1000);
-      events.push({
-        date: expiry.toISOString(),
-        title: `Badge Expiry: ${assessmentDetail.lastResult.badgeLabel}`,
-        type: 'badge_expiry',
-      });
-    }
-
-    // In-progress attempt deadline
-    if (currentAttempt?.deadlineAt) {
-      events.push({
-        date: currentAttempt.deadlineAt,
-        title: 'Active Assessment Deadline',
-        type: 'attempt_started',
-      });
-    }
-
-    return events;
-  }, [dashboardData?.recentActivity, assessmentDetail?.lastResult, currentAttempt?.deadlineAt]);
-
-  // Compute Reminders from real data
-  const reminders: ReminderItem[] = useMemo(() => {
-    const list: ReminderItem[] = [];
-
-    // 1. Attempt in progress with deadline
-    if (currentAttempt && remainingTimeText) {
-      list.push({
-        id: 'rem-in-progress',
-        title: 'Python assessment in progress',
-        dateText: `${remainingTimeText} remaining to submit`,
-        type: 'in_progress',
-      });
-    }
-
-    // 2. Badge expiring within 30 days
-    if (assessmentDetail?.lastResult?.completedAt) {
-      const issued = new Date(assessmentDetail.lastResult.completedAt);
-      const expiry = new Date(issued.getTime() + 365 * 24 * 60 * 60 * 1000);
-      const daysUntilExpiry = Math.round((expiry.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
-      if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
-        list.push({
-          id: 'rem-expiry',
-          title: 'Python badge renewal upcoming',
-          dateText: `Expires in ${daysUntilExpiry} days`,
-          type: 'expiring',
-        });
-      }
-    }
-
-    // 3. Practise next: weakest skill
-    if (dashboardData?.skills && dashboardData.skills.length > 0) {
-      const sorted = [...dashboardData.skills].sort((a, b) => a.proficiency - b.proficiency);
-      const weakest = sorted[0];
-      if (weakest) {
-        list.push({
-          id: 'rem-practise',
-          title: `Practise next: ${weakest.skillName}`,
-          dateText: `Recommended next skill to elevate to Demonstrated`,
-          type: 'practise',
-        });
-      }
-    } else {
-      list.push({
-        id: 'rem-practise-first',
-        title: 'Practise next: Python Fundamentals',
-        dateText: 'Complete the diagnostic assessment',
-        type: 'practise',
-      });
-    }
-
-    // 4. Retake available cooldown (if completed)
-    if (assessmentDetail?.lastResult?.completedAt && !currentAttempt) {
-      const completed = new Date(assessmentDetail.lastResult.completedAt);
-      list.push({
-        id: 'rem-retake',
-        title: 'Assessment Retake',
-        dateText: 'Available now (evidence updates on submission)',
-        type: 'retake',
-      });
-    }
-
-    return list;
-  }, [currentAttempt, remainingTimeText, assessmentDetail?.lastResult, dashboardData?.skills]);
-
-  const callbacksRef = useRef({
-    onNavigateToAssessments,
-    onNavigateToProfile,
-    onOpenAttempt,
-  });
-  callbacksRef.current = {
-    onNavigateToAssessments,
-    onNavigateToProfile,
-    onOpenAttempt,
-  };
-
-  const lastRightPanelKeyRef = useRef<string>('');
-
-  // Clear Right Panel on unmount only
-  useEffect(() => {
-    return () => {
-      onUpdateRightPanel?.(null);
-    };
-  }, [onUpdateRightPanel]);
-
-  // Update Right Panel in parent AppShell whenever data changes
-  useEffect(() => {
-    if (!onUpdateRightPanel) return;
-
-    const dataKey = [
-      assessmentDetail?.lastResult?.recordId || '',
-      assessmentDetail?.inProgressAttemptId || '',
-      assessmentDetail?.remainingSeconds || 0,
-      calendarEvents.length,
-      reminders.length,
-    ].join('::');
-
-    if (lastRightPanelKeyRef.current === dataKey) {
-      return;
-    }
-    lastRightPanelKeyRef.current = dataKey;
-
-    const rightPanelElement = (
-      <RightPanel
-        userName="Stella Walton"
-        userRole="Student"
-        hasBadge={Boolean(assessmentDetail?.lastResult)}
-        badgeLabel={assessmentDetail?.lastResult?.badgeLabel}
-        badgePercent={assessmentDetail?.lastResult?.overallPercent}
-        badgeStatus="active"
-        calendarEvents={calendarEvents}
-        reminders={reminders}
-        onNavigateToProfile={() => callbacksRef.current.onNavigateToProfile()}
-        onViewBadge={() => {
-          if (assessmentDetail?.lastResult) {
-            callbacksRef.current.onNavigateToAssessments();
-          }
-        }}
-        onStartAssessment={() => callbacksRef.current.onNavigateToAssessments()}
-        onReminderClick={(rem) => {
-          if (rem.type === 'in_progress' && assessmentDetail?.inProgressAttemptId && callbacksRef.current.onOpenAttempt) {
-            callbacksRef.current.onOpenAttempt(assessmentDetail.inProgressAttemptId);
-          } else {
-            callbacksRef.current.onNavigateToAssessments();
-          }
-        }}
-      />
-    );
-    onUpdateRightPanel(rightPanelElement);
-  }, [
-    assessmentDetail?.lastResult?.recordId,
-    assessmentDetail?.inProgressAttemptId,
-    assessmentDetail?.remainingSeconds,
-    calendarEvents,
-    reminders,
-    onUpdateRightPanel,
-  ]);
-
-  const handleBannerAction = () => {
-    if (bannerState === 'in_progress' && assessmentDetail?.inProgressAttemptId && onOpenAttempt) {
-      onOpenAttempt(assessmentDetail.inProgressAttemptId);
-    } else {
-      onNavigateToAssessments();
-    }
-  };
-
-  const handleSectionClick = () => {
-    if (assessmentDetail?.inProgressAttemptId && onOpenAttempt) {
-      onOpenAttempt(assessmentDetail.inProgressAttemptId);
-    } else {
-      onNavigateToAssessments();
-    }
-  };
-
-  // Define Columns for Skills DataTable
-  const skillColumns: Column<{
-    id: string;
-    name: string;
-    level: string;
-    confidence: string;
-    confidenceScore: number;
-    tier: string;
-    evidenceCount: number;
-    lastVerified: string;
-    isEvidenced: boolean;
-  }>[] = [
+  // Skills table columns
+  const skillColumns: Column<any>[] = [
     {
-      key: 'skill',
-      header: 'Skill',
-      className: 'col-span-4 sm:col-span-3',
+      key: 'name',
+      header: 'Skill Domain',
       render: (item) => (
-        <div className="space-y-0.5">
-          <div className="text-xs font-bold text-[#3B4A6B]">{item.name}</div>
-          <div className="text-[10px] font-mono text-[#8A94AD]">{item.id}</div>
+        <div>
+          <div className="font-semibold text-xs text-[#3B4A6B]">{item.name}</div>
+          <div className="text-[11px] text-[#8A94AD]">{item.id}</div>
         </div>
       ),
     },
     {
       key: 'level',
       header: 'Level',
-      className: 'col-span-2',
       render: (item) => <LevelBadge level={item.level} />,
     },
     {
       key: 'confidence',
       header: 'Confidence',
-      className: 'col-span-3 sm:col-span-2',
       render: (item) => (
         <ConfidenceRing
           confidence={item.confidence}
           score={item.confidenceScore}
+          size={24}
         />
       ),
     },
     {
       key: 'tier',
       header: 'Tier',
-      className: 'col-span-2 hidden sm:block',
       render: (item) => <TierChip tier={item.tier} />,
     },
     {
-      key: 'evidence',
-      header: 'Evidence',
-      className: 'col-span-3 sm:col-span-2 text-right sm:text-left',
-      render: (item) => (
-        <span
-          className={`text-xs font-semibold ${
-            item.isEvidenced ? 'text-[#3B4A6B]' : 'text-[#8A94AD]'
-          }`}
-        >
-          {item.isEvidenced ? `${item.evidenceCount} items` : 'Not yet evidenced'}
-        </span>
-      ),
-    },
-    {
       key: 'lastVerified',
-      header: 'Last Verified',
-      className: 'col-span-1 hidden sm:block text-right',
+      header: 'Verification Status',
       render: (item) => (
-        <span className="text-[11px] text-[#8A94AD]">
-          {item.lastVerified}
-        </span>
+        <span className="text-[11px] text-[#8A94AD]">{item.lastVerified}</span>
       ),
     },
   ];
 
-  // Define Columns for Recent Attempts DataTable
-  const attemptColumns: Column<{
-    id: string;
-    type: 'submission' | 'assessment';
-    title: string;
-    score: number;
-    date: string;
-    status: string;
-  }>[] = [
+  // Recent attempts columns
+  const attemptColumns: Column<any>[] = [
     {
-      key: 'date',
-      header: 'Date',
-      className: 'col-span-3 sm:col-span-2',
+      key: 'problemTitle',
+      header: 'Assessment / Problem',
       render: (item) => (
-        <span className="text-xs font-medium text-[#8A94AD]">
-          {new Date(item.date).toLocaleDateString('en-GB', {
-            day: 'numeric',
-            month: 'short',
-            year: 'numeric',
-          })}
-        </span>
+        <span className="font-medium text-xs text-[#3B4A6B]">{item.problemTitle}</span>
       ),
     },
     {
-      key: 'title',
-      header: 'Assessment / Activity',
-      className: 'col-span-4 sm:col-span-4',
+      key: 'language',
+      header: 'Language',
       render: (item) => (
-        <div className="flex items-center space-x-2">
-          <div className="p-1 rounded-lg bg-[#EAEDF2] text-[#4A64B8] shrink-0">
-            <Award className="w-3.5 h-3.5" />
-          </div>
-          <span className="text-xs font-bold text-[#3B4A6B] truncate">
-            {item.title}
-          </span>
-        </div>
-      ),
-    },
-    {
-      key: 'score',
-      header: 'Score',
-      className: 'col-span-2',
-      render: (item) => (
-        <span className="text-xs font-mono font-bold text-[#3B4A6B]">
-          {item.score}%
-        </span>
+        <span className="text-[11px] text-[#8A94AD] uppercase">{item.language}</span>
       ),
     },
     {
       key: 'status',
-      header: 'Status',
-      className: 'col-span-3 sm:col-span-2',
-      render: (item) => (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-          Completed
-        </span>
-      ),
+      header: 'Result',
+      render: (item) => {
+        const isPassed = item.status === 'Passed' || item.status === 'Accepted';
+        return (
+          <span
+            className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+              isPassed
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-rose-50 text-rose-700'
+            }`}
+          >
+            {isPassed ? (
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+            ) : (
+              <AlertCircle className="w-3 h-3 text-rose-600" />
+            )}
+            <span>{item.status}</span>
+          </span>
+        );
+      },
     },
     {
-      key: 'action',
-      header: 'Action',
-      className: 'col-span-2 hidden sm:block text-right',
-      render: () => (
-        <button
-          onClick={onNavigateToAssessments}
-          className="text-xs font-bold text-[#4A64B8] hover:text-[#3B4A6B] cursor-pointer"
-        >
-          View result →
-        </button>
+      key: 'timestamp',
+      header: 'Completed',
+      render: (item) => (
+        <span className="text-[11px] text-[#8A94AD]">{item.timestamp}</span>
       ),
     },
   ];
 
-  if (loading) {
+  // Push right panel content
+  useEffect(() => {
+    if (!onUpdateRightPanel) return;
+
+    const calendarEvents: CalendarEvent[] = [
+      { id: '1', title: 'Python Fundamentals Review', date: new Date(), time: 'Today', type: 'assessment' },
+      { id: '2', title: 'Java Core Systems Evaluation', date: new Date(Date.now() + 86400000), time: 'Tomorrow', type: 'assessment' },
+    ];
+
+    const reminders: ReminderItem[] = [
+      {
+        id: 'r1',
+        title: 'Complete 25-Question Assessment',
+        description: 'Earn a cryptographically signed score badge on your Skill Passport.',
+        due: 'Anytime',
+        actionLabel: 'Take Test',
+        onAction: () => onNavigateToAssessments('python-fundamentals'),
+      },
+    ];
+
+    onUpdateRightPanel(
+      <RightPanel
+        events={calendarEvents}
+        reminders={reminders}
+        onViewAllSchedule={() => onNavigateToAssessments()}
+      />
+    );
+  }, [onUpdateRightPanel, onNavigateToAssessments]);
+
+  if (loading && !dashboardData && !assessmentDetail) {
     return (
-      <div className="space-y-6">
-        {/* Skeleton Banner */}
-        <div className="bg-white rounded-3xl p-8 h-44 animate-pulse shadow-xs" />
-        {/* Skeleton Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white rounded-2xl h-44 animate-pulse shadow-xs" />
-          <div className="bg-white rounded-2xl h-44 animate-pulse shadow-xs" />
-          <div className="bg-white rounded-2xl h-44 animate-pulse shadow-xs" />
-        </div>
-        {/* Skeleton Table */}
-        <div className="bg-white rounded-2xl p-6 h-64 animate-pulse shadow-xs" />
+      <div className="flex flex-col items-center justify-center py-20 space-y-3">
+        <RefreshCw className="w-6 h-6 animate-spin text-[#4A64B8]" />
+        <span className="text-xs text-[#8A94AD] font-medium">Loading skill dashboard...</span>
       </div>
     );
   }
 
-  if (error) {
+  if (error && !dashboardData && !assessmentDetail) {
     return (
-      <div className="bg-white rounded-2xl p-8 border border-rose-100 shadow-sm text-center space-y-4">
+      <div className="p-6 rounded-2xl bg-white border border-rose-200 text-center space-y-4">
         <AlertCircle className="w-8 h-8 text-rose-500 mx-auto" />
         <div>
           <h3 className="text-base font-bold text-[#3B4A6B]">Failed to load dashboard</h3>
@@ -590,35 +374,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-7">
-      {/* 0. INCOMPLETE ONBOARDING REMINDER BANNER */}
-      {user && user.onboardingCompleted === false && (
-        <div className="p-4 rounded-2xl bg-amber-50/90 border border-amber-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-amber-950">
-                Personalized Skill Setup Incomplete
-              </h4>
-              <p className="text-[11px] text-amber-900/80 mt-0.5">
-                Upload your resume or tell us your background to extract your skills and start tailored AI assessments.
-              </p>
-            </div>
+      {/* 1. ANALYSE MY RESUME / CV BANNER (Friendly coming soon notice on click) */}
+      <div className="p-5 rounded-2xl bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-xl bg-blue-100 text-[#4A64B8] shrink-0">
+            <FileText className="w-5 h-5" />
           </div>
-          <button
-            type="button"
-            onClick={() => setShowOnboarding(true)}
-            className="px-4 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 text-white font-bold text-xs shrink-0 cursor-pointer shadow-xs transition-colors"
-          >
-            Complete Onboarding
-          </button>
+          <div>
+            <h3 className="text-sm font-bold text-[#3B4A6B]">
+              Personalized CV Analysis
+            </h3>
+            <p className="text-xs text-[#6B7A99] mt-0.5">
+              Personalized CV analysis coming soon. For now, choose one of the verified skill assessments below.
+            </p>
+          </div>
         </div>
-      )}
+        <button
+          type="button"
+          onClick={() => setShowCvComingSoonModal(true)}
+          className="px-5 py-2.5 rounded-xl bg-[#4A64B8] hover:bg-[#3B4A6B] text-white font-bold text-xs shrink-0 cursor-pointer shadow-xs transition-colors flex items-center gap-2"
+        >
+          <Sparkles className="w-4 h-4" />
+          <span>Analyse my resume / CV</span>
+        </button>
+      </div>
 
-      {/* 1. WELCOME BANNER matching Learnthru reference card */}
+      {/* 2. WELCOME BANNER matching Learnthru reference card */}
       <Banner
-        userName={user?.name ? user.name.split(' ')[0] : 'Stella'}
+        userName={user?.name ? user.name.split(' ')[0] : 'Candidate'}
         state={bannerState}
         remainingTimeText={remainingTimeText}
         badgeLabel={assessmentDetail?.lastResult?.badgeLabel}
@@ -626,62 +409,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         onActionClick={handleBannerAction}
       />
 
-      {/* TARGET SKILLS FOR VERIFICATION (from onboarding) */}
-      {user?.skills && user.skills.length > 0 && (
-        <div className="space-y-3 p-4.5 rounded-2xl bg-slate-50/80 border border-slate-200/80">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#4A64B8]" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-[#3B4A6B]">
-                Your Target Skills (Gemini Diagnostics)
-              </h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowOnboarding(true)}
-              className="text-[11px] font-semibold text-[#4A64B8] hover:text-[#3B4A6B] cursor-pointer"
-            >
-              Edit skills →
-            </button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {user.skills.map((skill) => (
-              <div
-                key={skill.name}
-                className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-between"
-              >
-                <div>
-                  <div className="text-xs font-bold text-ink flex items-center gap-1.5">
-                    <span>{skill.name}</span>
-                    {skill.verified && (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    )}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    {skill.verified ? `${skill.tier} (${skill.score}%)` : `Claimed: ${skill.level}`}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAssessingSkill({ skillName: skill.name, level: skill.level })}
-                  className="px-3 py-1.5 rounded-lg bg-[#4A64B8] hover:bg-[#3B4A6B] text-white text-[11px] font-semibold cursor-pointer transition-colors shadow-2xs"
-                >
-                  {skill.verified ? 'Retake' : 'Verify'}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 2. ASSESSMENT SECTIONS matching reference's class cards */}
-      <div className="space-y-3.5">
+      {/* 3. FOUR FIXED ASSESSMENT CARDS: Python, Java, DSA, and Front-end Development */}
+      <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold text-[#3B4A6B] tracking-tight">
-            Assessment
-          </h2>
+          <div>
+            <h2 className="text-base font-bold text-[#3B4A6B] tracking-tight">
+              Skill Assessments
+            </h2>
+            <p className="text-xs text-[#8A94AD] mt-0.5">
+              25-question standardized assessments with automated MCQ and online coding verification.
+            </p>
+          </div>
           <button
-            onClick={onNavigateToAssessments}
+            onClick={() => onNavigateToAssessments()}
             className="text-xs font-semibold text-[#8A94AD] hover:text-[#3B4A6B] flex items-center gap-0.5 cursor-pointer transition-colors"
           >
             <span>View all</span>
@@ -689,48 +429,107 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <GradientCard
-            tier="easy"
-            title="Section A: Basic"
-            subtitle="5 MCQs"
-            answeredCount={sectionCounts.secA}
-            totalQuestions={5}
-            scorePercent={assessmentDetail?.lastResult ? 100 : undefined}
-            isFinished={Boolean(assessmentDetail?.lastResult)}
-            weight={1}
-            onClick={handleSectionClick}
-          />
-          <GradientCard
-            tier="medium"
-            title="Section B: Medium"
-            subtitle="6 MCQs + 4 coding"
-            answeredCount={sectionCounts.secB}
-            totalQuestions={10}
-            scorePercent={assessmentDetail?.lastResult ? Math.min(100, assessmentDetail.lastResult.overallPercent) : undefined}
-            isFinished={Boolean(assessmentDetail?.lastResult)}
-            weight={2}
-            onClick={handleSectionClick}
-          />
-          <GradientCard
-            tier="hard"
-            title="Section C: Hard"
-            subtitle="10 coding problems"
-            answeredCount={sectionCounts.secC}
-            totalQuestions={10}
-            scorePercent={assessmentDetail?.lastResult ? Math.max(0, assessmentDetail.lastResult.overallPercent - 10) : undefined}
-            isFinished={Boolean(assessmentDetail?.lastResult)}
-            weight={3}
-            onClick={handleSectionClick}
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {FIXED_ASSESSMENTS.map((card) => {
+            const summary = assessmentsList.find(
+              (a) => a.id === card.id || (card.id === 'python-fundamentals' && a.id === 'python')
+            );
+            const hasResult = Boolean(summary?.lastResult);
+            const scorePercent = summary?.lastResult?.overallPercent;
+            const inProgress = Boolean(summary?.lastResult ? false : summary && (summary as any).inProgressAttemptId);
+
+            // Status label
+            let statusBadge = (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                Not started
+              </span>
+            );
+            let actionText = 'Start Test';
+
+            if (hasResult && scorePercent !== undefined) {
+              statusBadge = (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200/60">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span>Score: {scorePercent}/100</span>
+                </span>
+              );
+              actionText = 'Retake Test';
+            } else if (inProgress) {
+              statusBadge = (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200/60">
+                  <Clock className="w-3 h-3 text-amber-600" />
+                  <span>In progress</span>
+                </span>
+              );
+              actionText = 'Resume Test';
+            }
+
+            const isLockedForVisitor = card.requiresAuth && !user;
+
+            return (
+              <div
+                key={card.id}
+                className="p-5 rounded-2xl bg-white border border-slate-200 shadow-2xs hover:border-slate-300 hover:shadow-xs transition-all flex flex-col justify-between"
+              >
+                <div className="space-y-3">
+                  {/* Top line: title, badges */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-bold text-[#3B4A6B]">
+                          {card.title}
+                        </h3>
+                        {isLockedForVisitor && (
+                          <span
+                            title="Sign in required"
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500"
+                          >
+                            <Lock className="w-3 h-3" />
+                            <span>Sign in</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-[#8A94AD] font-medium">
+                        <span>{card.questionsCount}</span>
+                        <span>·</span>
+                        <span>{card.format}</span>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">{statusBadge}</div>
+                  </div>
+
+                  {/* Short description */}
+                  <p className="text-xs text-[#6B7A99] leading-relaxed line-clamp-2">
+                    {card.shortDescription}
+                  </p>
+                </div>
+
+                {/* Footer action bar */}
+                <div className="pt-4 mt-3 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    {card.id === 'python-fundamentals' ? 'Preview available' : 'Full 25-Q Suite'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleStartCard(card)}
+                    className="py-2 px-4 rounded-xl bg-[#4A64B8] hover:bg-[#3B4A6B] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                  >
+                    <span>{actionText}</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* 3. SKILLS DataTable matching reference's Lessons table */}
+      {/* 4. SKILLS DataTable */}
       <div className="space-y-3.5">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold text-[#3B4A6B] tracking-tight">
-            Your Python skills
+            Verified Skills Matrix
           </h2>
           <button
             onClick={onNavigateToSkills}
@@ -750,14 +549,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         />
       </div>
 
-      {/* 4. RECENT ATTEMPTS Compact DataTable */}
+      {/* 5. RECENT ATTEMPTS Compact DataTable */}
       <div className="space-y-3.5">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold text-[#3B4A6B] tracking-tight">
             Recent Attempts
           </h2>
           <button
-            onClick={onNavigateToAssessments}
+            onClick={() => onNavigateToAssessments()}
             className="text-xs font-semibold text-[#8A94AD] hover:text-[#3B4A6B] flex items-center gap-0.5 cursor-pointer transition-colors"
           >
             <span>History</span>
@@ -769,40 +568,116 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           columns={attemptColumns}
           data={dashboardData?.recentActivity?.slice(0, 3) || []}
           keyExtractor={(item) => item.id}
-          onRowClick={onNavigateToAssessments}
-          emptyMessage="No attempts recorded yet. Start the Python assessment to earn your verified badge."
+          onRowClick={() => onNavigateToAssessments()}
+          emptyMessage="No attempts recorded yet."
         />
       </div>
 
-      {/* Onboarding Modal */}
-      <OnboardingModal
-        isOpen={showOnboarding}
-        onClose={() => {
-          setShowOnboarding(false);
-          setOnboardingDismissed(true);
-        }}
-        onCompleted={async () => {
-          await refreshUser();
-          await fetchAll();
-        }}
-        onStartAssessment={(skillName, level) => {
-          setShowOnboarding(false);
-          setAssessingSkill({ skillName, level });
-        }}
-      />
+      {/* MODAL 1: CV Analysis Coming Soon friendly message */}
+      {showCvComingSoonModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 p-6 text-center space-y-5">
+            <button
+              onClick={() => setShowCvComingSoonModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
 
-      {/* Gemini Skill Verification Modal */}
-      {assessingSkill && (
-        <SkillAssessmentModal
-          skillName={assessingSkill.skillName}
-          level={assessingSkill.level}
-          isOpen={Boolean(assessingSkill)}
-          onClose={() => setAssessingSkill(null)}
-          onAssessmentCompleted={async () => {
-            await refreshUser();
-            await fetchAll();
-          }}
-        />
+            <div className="w-14 h-14 rounded-2xl bg-blue-50 text-[#4A64B8] mx-auto flex items-center justify-center shadow-inner">
+              <Sparkles className="w-7 h-7 text-[#4A64B8]" />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-slate-900">
+                CV Analysis Coming Soon
+              </h3>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                CV analysis is coming soon. For now, choose one of the skill assessments below.
+              </p>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3 text-left space-y-2 border border-slate-100 text-xs text-slate-600">
+              <span className="font-semibold text-slate-800 block text-[11px] uppercase tracking-wider">
+                Available Assessments (25 Questions):
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <span className="flex items-center gap-1.5 font-medium text-slate-700">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Python
+                </span>
+                <span className="flex items-center gap-1.5 font-medium text-slate-700">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Java
+                </span>
+                <span className="flex items-center gap-1.5 font-medium text-slate-700">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Data Structures
+                </span>
+                <span className="flex items-center gap-1.5 font-medium text-slate-700">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Front-end Dev
+                </span>
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCvComingSoonModal(false)}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#4A64B8] hover:bg-[#3B4A6B] text-white text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-colors"
+              >
+                <span>Choose an Assessment</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: Visitor Sign-In Required for Java / DSA / Frontend */}
+      {signInPromptCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 p-6 text-center space-y-5">
+            <button
+              onClick={() => setSignInPromptCard(null)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-700 mx-auto flex items-center justify-center shadow-inner">
+              <Lock className="w-7 h-7 text-amber-700" />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-slate-900">
+                Sign In Required
+              </h3>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                Please sign in to take the <strong>{signInPromptCard.title}</strong> assessment. The Python assessment is available for public preview without an account.
+              </p>
+            </div>
+
+            <div className="pt-2 flex flex-col sm:flex-row items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSignInPromptCard(null);
+                  onNavigateToAssessments('python-fundamentals');
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition-colors"
+              >
+                Try Python Assessment
+              </button>
+              <a
+                href="/login"
+                className="w-full py-2.5 px-4 rounded-xl bg-[#4A64B8] hover:bg-[#3B4A6B] text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+              >
+                <span>Sign In to Continue</span>
+                <ArrowRight className="w-4 h-4" />
+              </a>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { store } from '../store.ts';
-import { adminDb } from '../firebase-admin.ts';
-import { FieldValue } from 'firebase-admin/firestore';
+import { store, DEMO_USER_ID } from '../store.ts';
+import { syncSectionToFirestore, saveUserRecord } from '../user-repo.ts';
 import {
   AssessmentSectionRecord,
   DynamicQuestion,
@@ -73,9 +72,12 @@ export async function getUserRateLimits(userId: string): Promise<UserRateLimitRe
 }
 
 export async function checkAndIncrementResumeParse(userId: string): Promise<{ ok: boolean; reason?: string }> {
+  if (userId === DEMO_USER_ID && process.env.NODE_ENV !== 'production') {
+    return { ok: true };
+  }
   const limits = await getUserRateLimits(userId);
-  if (limits.resumeParsesToday >= 3) {
-    return { ok: false, reason: 'Daily resume parse limit (3 per day) reached. Please type your skills or try again tomorrow.' };
+  if (limits.resumeParsesToday >= 5) {
+    return { ok: false, reason: 'Daily CV analysis limit (5 per day) reached. Please try again tomorrow.' };
   }
   limits.resumeParsesToday++;
   await store.put('user_rate_limits', userId, limits);
@@ -121,22 +123,33 @@ export async function checkSkillCooldown(userId: string, skillSlug: string): Pro
  */
 export async function initializeUserSections(
   userId: string,
-  skills: Array<{ name: string; category?: string; claimedLevel?: string; level?: string; evidence?: string }>
+  skills: Array<{ name: string; category?: string; claimedLevel?: string; level?: string; evidence?: string }>,
+  replace: boolean = false
 ): Promise<{ activeSections: AssessmentSectionRecord[]; laterSkills: NormalizedSkill[] }> {
   const { activeSkills, laterSkills } = normalizeSkillList(skills, 6);
   const activeSections: AssessmentSectionRecord[] = [];
 
+  if (replace) {
+    // Delete existing sections for this user so a new analysis replaces previous cards
+    const allSections = await store.list<AssessmentSectionRecord>('user_sections');
+    const userOldSections = allSections.filter((s) => s.userId === userId);
+    for (const old of userOldSections) {
+      await store.delete('user_sections', `${userId}_${old.skillSlug}`);
+    }
+  }
+
   for (const s of activeSkills) {
     const sectionKey = `${userId}_${s.slug}`;
-    const existing = await store.get<AssessmentSectionRecord>('user_sections', sectionKey);
-
-    if (existing) {
-      activeSections.push(existing);
-      continue;
+    if (!replace) {
+      const existing = await store.get<AssessmentSectionRecord>('user_sections', sectionKey);
+      if (existing) {
+        activeSections.push(existing);
+        continue;
+      }
     }
 
     const isPython = s.slug === 'python';
-    const initialStatus = isPython ? 'ready' : 'not_started';
+    const initialStatus = 'not_started';
 
     const record: AssessmentSectionRecord = {
       id: s.slug,
@@ -164,49 +177,34 @@ export async function initializeUserSections(
 
     await store.put('user_sections', sectionKey, record);
 
-    // Also persist into Firestore subcollection users/{uid}/assessmentSections/{skillSlug}
+    // Also persist into Firestore subcollection users/{uid}/assessmentSections/{skillSlug} if available
     try {
-      await adminDb
-        .collection('users')
-        .doc(userId)
-        .collection('assessmentSections')
-        .doc(s.slug)
-        .set(
-          {
-            name: s.name,
-            category: s.category,
-            claimedLevel: s.claimedLevel,
-            status: record.status,
-            questionIds: record.questionIds,
-            totalQuestions: 25,
-            score: null,
-            badgeLabel: null,
-            attempts: 0,
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-    } catch (fsErr) {
-      // Non-blocking catch
-      console.warn('[Firestore] assessmentSection write warning (non-fatal):', fsErr);
-    }
+      await syncSectionToFirestore(userId, s.slug, {
+        name: s.name,
+        category: s.category,
+        claimedLevel: s.claimedLevel,
+        status: record.status,
+        questionIds: record.questionIds,
+        totalQuestions: 25,
+        score: null,
+        badgeLabel: null,
+        attempts: 0,
+      });
+    } catch {}
 
     activeSections.push(record);
   }
 
-  // Save later skills to user profile for dashboard "Assess later"
+  // Save later skills to user profile in store and Firestore if available
   try {
-    await adminDb.collection('users').doc(userId).set(
-      {
-        laterSkills: laterSkills.map((ls) => ({
-          name: ls.name,
-          slug: ls.slug,
-          category: ls.category,
-          claimedLevel: ls.claimedLevel,
-        })),
-      },
-      { merge: true }
-    );
+    await saveUserRecord(userId, {
+      laterSkills: laterSkills.map((ls) => ({
+        name: ls.name,
+        slug: ls.slug,
+        category: ls.category,
+        claimedLevel: ls.claimedLevel,
+      })),
+    });
   } catch {}
 
   return { activeSections, laterSkills };
@@ -279,10 +277,7 @@ export async function openUserSection(
 
   // Update Firestore
   try {
-    await adminDb.collection('users').doc(userId).collection('assessmentSections').doc(skillSlug).update({
-      status: 'generating',
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await syncSectionToFirestore(userId, skillSlug, { status: 'generating' });
   } catch {}
 
   try {
@@ -313,11 +308,10 @@ export async function openUserSection(
     await store.put('user_sections', sectionKey, section);
 
     try {
-      await adminDb.collection('users').doc(userId).collection('assessmentSections').doc(skillSlug).update({
+      await syncSectionToFirestore(userId, skillSlug, {
         status: 'ready',
         questionIds: section.questionIds,
         totalQuestions: section.totalQuestions,
-        updatedAt: FieldValue.serverTimestamp(),
       });
     } catch {}
 
@@ -331,9 +325,8 @@ export async function openUserSection(
     await store.put('user_sections', sectionKey, section);
 
     try {
-      await adminDb.collection('users').doc(userId).collection('assessmentSections').doc(skillSlug).update({
+      await syncSectionToFirestore(userId, skillSlug, {
         status: 'failed',
-        updatedAt: FieldValue.serverTimestamp(),
       });
     } catch {}
 

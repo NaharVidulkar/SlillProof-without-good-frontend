@@ -18,17 +18,28 @@ import {
   SkillScoreBreakdown,
 } from './types.ts';
 import { PYTHON_FUNDAMENTALS_ASSESSMENT } from './python-fundamentals.ts';
+import { JAVA_ASSESSMENT } from './java.ts';
+import { DSA_ASSESSMENT } from './dsa.ts';
+import { FRONTEND_ASSESSMENT } from './frontend.ts';
 import { Submission } from '../../types.ts';
 
 // Registry of all supported assessments
-export const ASSESSMENTS: Assessment[] = [PYTHON_FUNDAMENTALS_ASSESSMENT];
+export const ASSESSMENTS: Assessment[] = [
+  PYTHON_FUNDAMENTALS_ASSESSMENT,
+  JAVA_ASSESSMENT,
+  DSA_ASSESSMENT,
+  FRONTEND_ASSESSMENT,
+];
 
 export function getAllAssessments(): Assessment[] {
   return ASSESSMENTS;
 }
 
 export function getAssessmentById(id: string): Assessment | undefined {
-  const normId = id === 'python' ? 'python-fundamentals' : id;
+  const normId =
+    id === 'python' ? 'python-fundamentals' :
+    id === 'frontend' ? 'frontend-dev' :
+    id;
   return ASSESSMENTS.find((a) => a.id === normId);
 }
 
@@ -56,7 +67,12 @@ export function getPublicAssessmentSummaries(
         title: sec.title,
         difficultyLabel: sec.difficultyLabel,
         questionCount: sec.questions.length,
-        description: sec.id === 'A' ? '5 MCQs' : sec.id === 'B' ? '6 MCQs + 4 coding' : '10 real-life coding problems',
+        description:
+          sec.id === 'A'
+            ? `${mcq} MCQs${code > 0 ? ` + ${code} coding` : ''}`
+            : sec.id === 'B'
+            ? `${mcq} MCQs + ${code} coding`
+            : `${code} coding problems${mcq > 0 ? ` + ${mcq} MCQs` : ''}`,
       };
     });
 
@@ -157,7 +173,12 @@ export function getPublicAssessmentDetail(id: string): PublicAssessmentDetail | 
       title: s.title,
       difficultyLabel: s.difficultyLabel,
       questionCount: s.questionCount,
-      description: s.id === 'A' ? '5 MCQs' : s.id === 'B' ? '6 MCQs + 4 coding' : '10 real-life coding problems',
+      description:
+        s.id === 'A'
+          ? `${s.mcqCount} MCQs${s.codeCount > 0 ? ` + ${s.codeCount} coding` : ''}`
+          : s.id === 'B'
+          ? `${s.mcqCount} MCQs + ${s.codeCount} coding`
+          : `${s.codeCount} coding problems${s.mcqCount > 0 ? ` + ${s.mcqCount} MCQs` : ''}`,
     })),
     sectionsDetailed,
   };

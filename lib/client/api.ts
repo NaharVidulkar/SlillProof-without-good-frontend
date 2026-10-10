@@ -257,6 +257,23 @@ export const clientApi = {
     return fetchJson<PassportProfile>(`/api/passport/${slug}`);
   },
 
+  // CV Analysis API
+  analyseCv: async (payload: {
+    fileData?: string;
+    fileName?: string;
+    mimeType?: string;
+    textContent?: string;
+  }): Promise<{ ok: boolean; analysis: any; sections?: any[]; profile?: any }> => {
+    return fetchJson<{ ok: boolean; analysis: any; sections?: any[]; profile?: any }>('/api/cv/analyse', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getLatestAnalysis: async (): Promise<{ ok: boolean; analysis: any | null }> => {
+    return fetchJson<{ ok: boolean; analysis: any | null }>('/api/cv/analysis/latest');
+  },
+
   // Dynamic Personalized Assessment Sections
   getUserSections: async (): Promise<{ sections: any[]; laterSkills?: any[] }> => {
     return fetchJson<{ sections: any[]; laterSkills?: any[] }>('/api/sections');

@@ -24,6 +24,11 @@ export async function runCode(
   code: string,
   input: string
 ): Promise<OnlineCompilerResult> {
+  const compLower = compiler.toLowerCase();
+  if (compLower === 'nodejs' || compLower === 'javascript' || compLower === 'js') {
+    return runLocalNode(code, input);
+  }
+
   const apiKey = process.env.ONLINECOMPILER_API_KEY?.trim();
 
   // If no external API key is provided, execute via real local Python runtime
@@ -211,6 +216,114 @@ function runLocalPython(
       resolve({
         output: '',
         error: `Python execution error: ${err.message}`,
+        status: 'error',
+        exitCode: 1,
+        timeSec: (Date.now() - startTime) / 1000,
+        memoryKb: 0,
+        isSimulated: false,
+      });
+    });
+
+    try {
+      if (input) {
+        child.stdin.write(input);
+      }
+      child.stdin.end();
+    } catch {
+      // stdin error
+    }
+  });
+}
+
+// Real local Node.js executor for frontend/JavaScript questions
+function runLocalNode(
+  code: string,
+  input: string
+): Promise<OnlineCompilerResult> {
+  return new Promise((resolve) => {
+    if (!code || !code.trim()) {
+      resolve({
+        output: '',
+        error: 'Empty code provided',
+        status: 'error',
+        exitCode: 1,
+        timeSec: 0,
+        memoryKb: 0,
+        isSimulated: false,
+      });
+      return;
+    }
+
+    const startTime = Date.now();
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+
+    // Execute via local node
+    const child = spawn('node', ['-e', code], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const timeout = setTimeout(() => {
+      killed = true;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+    }, 5000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+      if (stdout.length > 50000) {
+        killed = true;
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('close', (exitCode, signal) => {
+      clearTimeout(timeout);
+      const timeSec = Math.max(0.01, (Date.now() - startTime) / 1000);
+
+      if (killed && signal === 'SIGKILL') {
+        resolve({
+          output: stdout.slice(0, 999),
+          error: 'Execution timed out (5s limit)',
+          status: 'timeout',
+          exitCode: 124,
+          signal: 'SIGKILL',
+          timeSec,
+          memoryKb: 16384,
+          isSimulated: false,
+        });
+        return;
+      }
+
+      resolve({
+        output: stdout.slice(0, 999),
+        error: stderr ? stderr.slice(0, 999) : undefined,
+        status: exitCode === 0 ? 'success' : 'error',
+        exitCode: exitCode ?? (stderr ? 1 : 0),
+        signal: signal ?? undefined,
+        timeSec,
+        memoryKb: 8192,
+        isSimulated: false,
+      });
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({
+        output: '',
+        error: `Node execution error: ${err.message}`,
         status: 'error',
         exitCode: 1,
         timeSec: (Date.now() - startTime) / 1000,

@@ -93,9 +93,19 @@ export default function App() {
     }
   }, []);
 
-  const handleNavigateToAssessments = useCallback(() => {
-    handleTabChange('assessments');
-  }, [handleTabChange]);
+  const handleNavigateToAssessments = useCallback((assessmentId?: string) => {
+    if (assessmentId) {
+      setCurrentAssessmentId(assessmentId);
+      setCurrentSubView('detail');
+      window.history.pushState(null, '', `/assessments/${assessmentId}`);
+    } else {
+      setCurrentSubView('list');
+      window.history.pushState(null, '', '/assessments');
+    }
+    setActiveTab('assessments');
+    setIsAttemptMode(false);
+    setCurrentAttemptId(null);
+  }, []);
 
   const handleNavigateToSkills = useCallback(() => {
     handleTabChange('skills');

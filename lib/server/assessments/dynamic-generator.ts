@@ -6,10 +6,9 @@
 import { GoogleGenAI } from '@google/genai';
 import { PYTHON_FUNDAMENTALS_ASSESSMENT } from './python-fundamentals.ts';
 import { store } from '../store.ts';
-import {
-  NormalizedSkill,
-  RUNNABLE_LANGUAGE_MAP,
-} from '../../domain/skills-taxonomy.ts';
+import { safeParseJson } from '../cv-analyser.ts';
+import { RUNNABLE_LANGUAGE_MAP } from '../../domain/skills-taxonomy.ts';
+import type { NormalizedSkill } from '../../domain/skills-taxonomy.ts';
 
 export interface DynamicMcqQuestion {
   id: string;
@@ -145,6 +144,14 @@ async function callGeminiWithRetry<T>(
           err?.message?.includes('503') ||
           err?.message?.includes('high demand');
 
+        const isDailyQuota =
+          err?.message?.includes('Quota exceeded') ||
+          err?.message?.includes('RESOURCE_EXHAUSTED');
+
+        if (isDailyQuota) {
+          throw err;
+        }
+
         if (attempt <= retries && isRateLimitOr5xx) {
           console.warn(`[Gemini Queue] Backoff retry ${attempt}/${retries} in ${delay}ms...`);
           await new Promise((r) => setTimeout(r, delay));
@@ -255,8 +262,8 @@ Output strictly valid JSON:
 }`;
 
   const response = await callGeminiWithRetry(async (ai) => {
-    return ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    return await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
         temperature: 0.2,
@@ -265,7 +272,7 @@ Output strictly valid JSON:
     });
   });
 
-  const parsed = JSON.parse(response.text?.trim() || '{}');
+  const parsed = safeParseJson<any>(response.text || '{}');
   const rawList = Array.isArray(parsed.questions) ? parsed.questions : [];
 
   const validMcqs: DynamicMcqQuestion[] = [];
@@ -335,8 +342,8 @@ Output strictly valid JSON:
 }`;
 
   const response = await callGeminiWithRetry(async (ai) => {
-    return ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    return await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
         temperature: 0.2,
@@ -345,7 +352,7 @@ Output strictly valid JSON:
     });
   });
 
-  const parsed = JSON.parse(response.text?.trim() || '{}');
+  const parsed = safeParseJson<any>(response.text || '{}');
   const rawList = Array.isArray(parsed.problems) ? parsed.problems : [];
 
   const validCodes: DynamicCodingQuestion[] = [];

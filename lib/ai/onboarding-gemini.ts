@@ -124,32 +124,55 @@ Respond STRICTLY with valid JSON following this schema:
     contents = `Candidate Resume Content:\n${rawText.slice(0, 30000)}\n\nPlease extract structured profile and skills.`;
   }
 
-  // Attempt with 1 retry
+  // Attempt with 1 retry (unless 429 quota exceeded)
   let attempts = 0;
   while (attempts < 2) {
     try {
       const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      });
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-3.5-flash',
+          contents,
+          config: {
+            systemInstruction,
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        });
+      } catch {
+        response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents,
+          config: {
+            systemInstruction,
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        });
+      }
 
       const parsed = JSON.parse(response.text?.trim() || '{}');
       return sanitizeExtractedProfile(parsed);
-    } catch (err) {
+    } catch (err: any) {
       attempts++;
+      const errMsg = err?.message || String(err);
+      const isQuota = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+      if (isQuota) {
+        console.warn('[Gemini] Free tier request quota reached; seamlessly serving deterministic taxonomy profile.');
+        break;
+      }
       console.warn(`[Gemini] parseResume attempt ${attempts} failed:`, err);
       if (attempts >= 2) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
-  console.error('[Gemini] parseResume failed after 2 attempts; returning friendly fallback profile.');
+  const rawText = params.textContent || (params.fileData ? Buffer.from(params.fileData, 'base64').toString('utf-8') : '');
+  if (rawText) {
+    return generateFallbackProfileFromText(rawText, true);
+  }
+
   return generateFallbackProfile('Software Developer', 'Computer Science', true);
 }
 
@@ -212,15 +235,20 @@ Respond STRICTLY with valid JSON following this schema:
 
       const parsed = JSON.parse(response.text?.trim() || '{}');
       return sanitizeExtractedProfile(parsed);
-    } catch (err) {
+    } catch (err: any) {
       attempts++;
+      const errMsg = err?.message || String(err);
+      const isQuota = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+      if (isQuota) {
+        console.warn('[Gemini] Free tier request quota reached; seamlessly serving text parser profile.');
+        break;
+      }
       console.warn(`[Gemini] parseTextProfile attempt ${attempts} failed:`, err);
       if (attempts >= 2) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
-  console.error('[Gemini] parseTextProfile failed after 2 attempts; returning fallback profile.');
   return generateFallbackProfileFromText(userText, true);
 }
 
@@ -265,15 +293,6 @@ function sanitizeExtractedProfile(raw: any, fallbackUsed = false): ExtractedProf
     }
   }
 
-  // Ensure at least reasonable default skills if none were found
-  if (validSkills.length === 0) {
-    validSkills.push(
-      { name: 'Python', slug: 'python', category: 'programming', claimedLevel: 'Intermediate', level: 'Intermediate' },
-      { name: 'SQL', slug: 'sql', category: 'database', claimedLevel: 'Intermediate', level: 'Intermediate' },
-      { name: 'JavaScript', slug: 'javascript', category: 'programming', claimedLevel: 'Intermediate', level: 'Intermediate' }
-    );
-  }
-
   return {
     fieldOfStudy,
     summary,
@@ -288,15 +307,10 @@ function generateFallbackProfile(role = 'Software Developer', fieldOfStudy = 'Co
   return {
     role,
     fieldOfStudy,
-    summary: 'Candidate profile with core foundational technical skills.',
+    summary: 'Candidate profile extracted from provided input.',
     yearsOfExperience: 1,
     fallbackUsed,
-    skills: [
-      { name: 'Python', slug: 'python', category: 'programming', claimedLevel: 'Intermediate', level: 'Intermediate', evidence: 'Core language foundation' },
-      { name: 'SQL', slug: 'sql', category: 'database', claimedLevel: 'Intermediate', level: 'Intermediate', evidence: 'Relational data query design' },
-      { name: 'JavaScript', slug: 'javascript', category: 'programming', claimedLevel: 'Intermediate', level: 'Intermediate', evidence: 'Web application development' },
-      { name: 'Git', slug: 'git', category: 'tool', claimedLevel: 'Intermediate', level: 'Intermediate', evidence: 'Version control workflows' },
-    ],
+    skills: [],
   };
 }
 
@@ -333,13 +347,6 @@ function generateFallbackProfileFromText(text: string, fallbackUsed = false): Ex
         });
       }
     }
-  }
-
-  if (detectedSkills.length === 0) {
-    detectedSkills.push(
-      { name: 'Python', slug: 'python', category: 'programming', claimedLevel: 'Intermediate', level: 'Intermediate' },
-      { name: 'SQL', slug: 'sql', category: 'database', claimedLevel: 'Intermediate', level: 'Intermediate' }
-    );
   }
 
   return {
@@ -430,8 +437,14 @@ Respond STRICTLY with valid JSON following this schema:
           questions,
         };
       }
-    } catch (err) {
+    } catch (err: any) {
       attempts++;
+      const errMsg = err?.message || String(err);
+      const isQuota = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+      if (isQuota) {
+        console.warn('[Gemini] Free tier request quota reached; seamlessly serving pre-calibrated bank questions.');
+        break;
+      }
       console.warn(`[Gemini] generateSkillAssessment attempt ${attempts} failed:`, err);
       if (attempts >= 2) break;
       await new Promise((r) => setTimeout(r, 1000));

@@ -8,7 +8,7 @@ SkillProof helps candidates back up what they claim on a resume. Instead of list
 
 ![SkillProof landing page](docs/screenshots/landing.png)
 
-**Live demo:** https://skillproof-635348133582.asia-southeast1.run.app
+**Live demo:** https://slillproof.ai.studio/
 
 ---
 

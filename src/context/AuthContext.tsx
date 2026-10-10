@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { logout as apiLogout } from '../firebase';
+import { auth, getAuthHeaders, logout as apiLogout } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export interface AuthUser {
   uid: string;
@@ -41,7 +42,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setLoading(true);
       setError(null);
+      const authHeaders = await getAuthHeaders();
       const res = await fetch('/api/me', {
+        headers: authHeaders,
         credentials: 'include',
       });
 
@@ -67,6 +70,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     fetchUser();
+    // Listen to Firebase client auth state changes
+    const unsubscribe = onAuthStateChanged(auth, () => {
+      fetchUser();
+    });
+    return () => unsubscribe();
   }, [fetchUser]);
 
   const handleLogout = useCallback(async () => {

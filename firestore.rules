@@ -24,13 +24,15 @@ service cloud.firestore {
       // No blanket listing of user records
       allow list: if false;
 
-      // Users can update their profile, but cannot modify their immutable identity fields (uid, email)
-      allow update: if isValidId(userId) && isOwner(userId)
-        && request.resource.data.uid == resource.data.uid
-        && request.resource.data.email == resource.data.email;
+      // Users can create and write their own document using their signed-in credentials
+      allow create: if isValidId(userId) && isOwner(userId)
+        && request.resource.data.uid == userId;
 
-      // Document creation is handled by the server session endpoint
-      allow create, delete: if false;
+      // Users can update their profile
+      allow update: if isValidId(userId) && isOwner(userId)
+        && request.resource.data.uid == userId;
+
+      allow delete: if false;
 
       // Personalized assessment sections subcollection
       match /assessmentSections/{sectionId} {

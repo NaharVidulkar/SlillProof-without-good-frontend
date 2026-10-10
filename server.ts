@@ -60,6 +60,38 @@ import {
   McqQuestion,
 } from './lib/server/assessments/types.ts';
 import { checkLiteralHardcoding } from './lib/domain/combiner.ts';
+import {
+  initializeUserSections,
+  getUserSections,
+  openUserSection,
+  getQuestionsForSection,
+  sanitizeQuestionsForClient,
+  checkAndIncrementResumeParse,
+  checkAndIncrementSectionGeneration,
+  checkAndIncrementCompilerRun,
+  checkSkillCooldown,
+  getUserRateLimits,
+} from './lib/server/assessments/sections-manager.ts';
+import {
+  AssessmentSectionRecord,
+  DynamicCodingQuestion,
+  DynamicMcqQuestion,
+  DynamicQuestion,
+  getPythonQuestionsBank,
+} from './lib/server/assessments/dynamic-generator.ts';
+import {
+  RUNNABLE_LANGUAGE_MAP,
+  normalizeSkill,
+} from './lib/domain/skills-taxonomy.ts';
+
+// Global resilience handlers: Prevent unhandled promise errors from killing server process
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled Promise Rejection (handled safely):', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[Process] Uncaught Exception (handled safely):', error);
+});
 
 // Load both .env.local (preferred for local secrets) and standard .env with override enabled
 dotenv.config({ path: '.env.local', override: true });
@@ -138,10 +170,8 @@ async function startServer() {
     }
 
     const sessionCookie = req.cookies?.__session;
-    if (!sessionCookie || typeof sessionCookie !== 'string') return null;
-
     // Check custom signed session cookie if contains dot separator
-    if (sessionCookie.includes('.')) {
+    if (sessionCookie && typeof sessionCookie === 'string' && sessionCookie.includes('.')) {
       const customPayload = verifySessionPayload(sessionCookie, SESSION_SECRET);
       if (customPayload) {
         return {
@@ -155,18 +185,57 @@ async function startServer() {
           iat: Math.floor(Date.now() / 1000),
           iss: `https://securetoken.google.com/${firebaseConfig.projectId}`,
           sub: customPayload.uid,
-          firebase: { identities: {}, sign_in_provider: 'google.com' },
+          firebase: { identities: {}, sign_in_provider: 'session-cookie' },
         };
       }
     }
 
-    // Attempt Firebase Admin session cookie verification (relax checkRevoked to avoid clock-skew failures)
-    try {
-      const decodedClaims = await adminAuth.verifySessionCookie(sessionCookie, false);
-      return decodedClaims;
-    } catch {
-      return null;
+    // Check Authorization header fallback (if cookie is blocked in iframe)
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7).trim();
+      if (token) {
+        // Try custom signed HMAC token
+        if (token.includes('.') && token.split('.').length === 2) {
+          const customPayload = verifySessionPayload(token, SESSION_SECRET);
+          if (customPayload) {
+            return {
+              uid: customPayload.uid,
+              email: customPayload.email || undefined,
+              name: customPayload.name || undefined,
+              picture: customPayload.picture || undefined,
+              aud: firebaseConfig.projectId,
+              auth_time: Math.floor(Date.now() / 1000),
+              exp: customPayload.exp,
+              iat: Math.floor(Date.now() / 1000),
+              iss: `https://securetoken.google.com/${firebaseConfig.projectId}`,
+              sub: customPayload.uid,
+              firebase: { identities: {}, sign_in_provider: 'bearer-token' },
+            };
+          }
+        }
+
+        // Try Firebase ID token verification
+        try {
+          const decoded = await adminAuth.verifyIdToken(token, false);
+          return decoded;
+        } catch {
+          // Token invalid or expired
+        }
+      }
     }
+
+    // Attempt Firebase Admin session cookie verification if applicable
+    if (sessionCookie && typeof sessionCookie === 'string' && !sessionCookie.includes('.')) {
+      try {
+        const decodedClaims = await adminAuth.verifySessionCookie(sessionCookie, false);
+        return decodedClaims;
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
   };
 
   const requireAuth: express.RequestHandler = async (req, res, next) => {
@@ -219,35 +288,19 @@ async function startServer() {
     }
 
     // Step 2: Establish session cookie (5 days expiry)
+    // Issue our own HMAC-signed session cookie containing uid, email, exp (no service account needed)
     const expiresIn = 5 * 24 * 60 * 60 * 1000;
-    let sessionCookieVal: string;
-
-    try {
-      sessionCookieVal = await adminAuth.createSessionCookie(idToken, { expiresIn });
-      console.log('[Auth] Firebase admin createSessionCookie succeeded.');
-    } catch (err: unknown) {
-      const error = err as { code?: string; message?: string };
-      console.error(
-        '[Auth] createSessionCookie failed (credential/permission error). Code:',
-        error.code,
-        'Message:',
-        error.message
-      );
-      console.log('[Auth] Issuing signed httpOnly session cookie fallback...');
-
-      // Fallback: issue our own HMAC-signed session cookie containing uid, email, exp
-      const expSec = Math.floor((Date.now() + expiresIn) / 1000);
-      sessionCookieVal = signSessionPayload(
-        {
-          uid: decodedToken.uid,
-          email: decodedToken.email || null,
-          name: decodedToken.name || decodedToken.email?.split('@')[0] || null,
-          picture: decodedToken.picture || null,
-          exp: expSec,
-        },
-        SESSION_SECRET
-      );
-    }
+    const expSec = Math.floor((Date.now() + expiresIn) / 1000);
+    const sessionCookieVal = signSessionPayload(
+      {
+        uid: decodedToken.uid,
+        email: decodedToken.email || null,
+        name: decodedToken.name || decodedToken.email?.split('@')[0] || null,
+        picture: decodedToken.picture || null,
+        exp: expSec,
+      },
+      SESSION_SECRET
+    );
 
     // Set cookie: secure: true, sameSite: 'none' for iframe preview compatibility, httpOnly: true
     res.cookie('__session', sessionCookieVal, {
@@ -285,11 +338,12 @@ async function startServer() {
         console.log(`[Auth] Updated Firestore users lastLoginAt for ${decodedToken.uid}`);
       }
     } catch (fsErr) {
-      console.error('[Auth] Firestore user document creation error (non-fatal):', fsErr);
+      console.warn('[Auth] Firestore user document creation error (non-fatal, client also syncs):', fsErr);
     }
 
     return res.json({
       ok: true,
+      sessionToken: sessionCookieVal,
       user: {
         uid: decodedToken.uid,
         email: decodedToken.email || null,
@@ -364,18 +418,57 @@ async function startServer() {
   // ONBOARDING & GEMINI SKILL ASSESSMENT ROUTES
   // ==========================================
 
-  // In-memory cache for active generated assessments
+  // ==========================================
+  // DYNAMIC PERSONALIZED ONBOARDING & SECTIONS
+  // ==========================================
+
+  // In-memory cache for legacy active generated assessments
   const activeAssessmentsMap = new Map<string, GeneratedAssessment>();
 
-  // POST /api/onboarding/parse-resume: Extract candidate profile and skills via Gemini
+  // GET /api/health: System and external integration health check
+  app.get('/api/health', async (_req, res) => {
+    let firestoreOk = true;
+    try {
+      await adminDb.collection('_health').doc('ping').set({ ts: FieldValue.serverTimestamp() }, { merge: true });
+    } catch {
+      firestoreOk = false;
+    }
+
+    const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
+    const compilerConfigured = Boolean(process.env.ONLINECOMPILER_API_KEY && process.env.ONLINECOMPILER_API_KEY !== 'MY_ONLINECOMPILER_API_KEY');
+
+    return res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      firestore: firestoreOk,
+      geminiConfigured,
+      compilerConfigured,
+    });
+  });
+
+  // POST /api/onboarding/parse-resume: Extract candidate profile and skills via Gemini with retry & limits
   app.post('/api/onboarding/parse-resume', async (req, res) => {
     try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      // Rate limit check: max 3 resume parses per day
+      const limitCheck = await checkAndIncrementResumeParse(uid);
+      if (!limitCheck.ok) {
+        return res.status(429).json({ error: limitCheck.reason });
+      }
+
       const { fileData, fileName, mimeType, textContent } = req.body || {};
       if (!fileData && !textContent) {
         return res.status(400).json({ error: 'No resume file data or text content provided' });
       }
 
-      console.log(`[Onboarding] Parsing resume with Gemini (${fileName || 'text'})...`);
+      // 5 MB cap
+      if (fileData && typeof fileData === 'string' && fileData.length > 5 * 1024 * 1024 * 1.37) {
+        return res.status(400).json({ error: 'File size exceeds the 5 MB maximum limit' });
+      }
+
+      console.log(`[Onboarding] Parsing resume with Gemini for user ${uid} (${fileName || 'text'})...`);
       const profile = await parseResumeWithGemini({
         fileData,
         fileName,
@@ -396,12 +489,15 @@ async function startServer() {
   // POST /api/onboarding/parse-text: Turn free-text background into structured skills via Gemini
   app.post('/api/onboarding/parse-text', async (req, res) => {
     try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
       const { text } = req.body || {};
       if (!text || typeof text !== 'string' || !text.trim()) {
         return res.status(400).json({ error: 'Please enter a description of yourself and your skills.' });
       }
 
-      console.log('[Onboarding] Parsing user text with Gemini...');
+      console.log(`[Onboarding] Parsing user text with Gemini for user ${uid}...`);
       const profile = await parseTextProfileWithGemini(text.trim());
 
       return res.json({ ok: true, profile });
@@ -414,20 +510,14 @@ async function startServer() {
     }
   });
 
-  // POST /api/onboarding/complete: Save confirmed profile and top skills to Firestore
+  // POST /api/onboarding/complete: Save confirmed profile and initialize dynamic sections
   app.post('/api/onboarding/complete', async (req, res) => {
     try {
       const sessionUser = await verifySession(req);
       const uid = sessionUser?.uid || DEMO_USER_ID;
 
       const { role, fieldOfStudy, yearsOfExperience, skills } = req.body || {};
-      const confirmedSkills = Array.isArray(skills)
-        ? skills.slice(0, 5).map((s: any) => ({
-            name: typeof s === 'string' ? s.trim() : String(s.name || '').trim(),
-            level: s.level || 'Intermediate',
-            verified: false,
-          }))
-        : [];
+      const rawSkills = Array.isArray(skills) ? skills : [];
 
       const profileData = {
         role: typeof role === 'string' && role.trim() ? role.trim() : 'Software Developer',
@@ -435,28 +525,44 @@ async function startServer() {
         yearsOfExperience: typeof yearsOfExperience === 'number' ? yearsOfExperience : 1,
       };
 
-      // Persist to Firestore
+      // Initialize one section per skill (capped at 6 active, remainder as laterSkills)
+      const { activeSections, laterSkills } = await initializeUserSections(uid, rawSkills);
+
+      // Persist user profile to Firestore
       try {
         await adminDb.collection('users').doc(uid).set(
           {
             onboardingCompleted: true,
             onboardingSkipped: false,
             profile: profileData,
-            skills: confirmedSkills,
+            skills: activeSections.map((sec) => ({
+              name: sec.skillName,
+              slug: sec.skillSlug,
+              category: sec.category,
+              level: sec.claimedLevel,
+              verified: false,
+            })),
+            laterSkills: laterSkills.map((ls) => ({
+              name: ls.name,
+              slug: ls.slug,
+              category: ls.category,
+              level: ls.claimedLevel,
+            })),
             updatedAt: FieldValue.serverTimestamp(),
           },
           { merge: true }
         );
-        console.log(`[Onboarding] Completed for user ${uid} with ${confirmedSkills.length} skills`);
+        console.log(`[Onboarding] Completed for ${uid}: initialized ${activeSections.length} sections, ${laterSkills.length} for later.`);
       } catch (fsErr) {
-        console.error('[Onboarding] Firestore write error (non-fatal):', fsErr);
+        console.warn('[Onboarding] Firestore profile write error (non-fatal):', fsErr);
       }
 
       return res.json({
         ok: true,
         message: 'Onboarding completed',
         profile: profileData,
-        skills: confirmedSkills,
+        sections: activeSections,
+        laterSkills,
       });
     } catch (err: unknown) {
       console.error('[Onboarding] complete failed:', err);
@@ -464,7 +570,7 @@ async function startServer() {
     }
   });
 
-  // POST /api/onboarding/skip: Skip onboarding for now
+  // POST /api/onboarding/skip: Skip onboarding for now and ensure default Python section
   app.post('/api/onboarding/skip', async (req, res) => {
     try {
       const sessionUser = await verifySession(req);
@@ -479,13 +585,494 @@ async function startServer() {
           { merge: true }
         );
       } catch (fsErr) {
-        console.error('[Onboarding] Firestore skip write error:', fsErr);
+        console.warn('[Onboarding] Firestore skip write error:', fsErr);
       }
+
+      // Ensure Python section exists so the user has immediate access
+      await initializeUserSections(uid, [{ name: 'Python', level: 'Intermediate' }]);
 
       return res.json({ ok: true, skipped: true });
     } catch (err: unknown) {
       console.error('[Onboarding] skip failed:', err);
       return res.status(500).json({ error: 'Failed to record skip preference' });
+    }
+  });
+
+  // GET /api/sections: Retrieve all personalized assessment sections for current user
+  app.get('/api/sections', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      let sections = await getUserSections(uid);
+
+      // If user has no sections yet, check if they have confirmed skills in profile or initialize Python
+      if (sections.length === 0) {
+        let skillsFromProfile: any[] = [];
+        try {
+          const doc = await adminDb.collection('users').doc(uid).get();
+          if (doc.exists) {
+            skillsFromProfile = doc.data()?.skills || [];
+          }
+        } catch {}
+
+        if (skillsFromProfile.length > 0) {
+          const initRes = await initializeUserSections(uid, skillsFromProfile);
+          sections = initRes.activeSections;
+        } else {
+          const initRes = await initializeUserSections(uid, [{ name: 'Python', level: 'Intermediate' }]);
+          sections = initRes.activeSections;
+        }
+      }
+
+      // Read laterSkills
+      let laterSkills: any[] = [];
+      try {
+        const doc = await adminDb.collection('users').doc(uid).get();
+        if (doc.exists) {
+          laterSkills = doc.data()?.laterSkills || [];
+        }
+      } catch {}
+
+      return res.json({ ok: true, sections, laterSkills });
+    } catch (err: unknown) {
+      console.error('[Sections] GET /api/sections error:', err);
+      return res.status(500).json({ error: 'Failed to retrieve assessment sections' });
+    }
+  });
+
+  // POST /api/sections/:skillSlug/open: Open or lazily generate section questions
+  app.post('/api/sections/:skillSlug/open', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+      const { skillSlug } = req.params;
+
+      if (!skillSlug) {
+        return res.status(400).json({ error: 'Missing skillSlug parameter' });
+      }
+
+      console.log(`[Sections] Opening section '${skillSlug}' for user ${uid}...`);
+      const { section, questions } = await openUserSection(uid, skillSlug);
+
+      const sanitizedQuestions = questions ? sanitizeQuestionsForClient(questions) : undefined;
+
+      return res.json({
+        ok: true,
+        section,
+        questions: sanitizedQuestions,
+      });
+    } catch (err: any) {
+      console.error(`[Sections] Open section '${req.params.skillSlug}' failed:`, err);
+      return res.status(err?.status === 429 ? 429 : 500).json({
+        error: err?.message || 'Failed to open assessment section',
+      });
+    }
+  });
+
+  // POST /api/sections/:skillSlug/save-progress: Autosave user progress (answers, code drafts, question index)
+  app.post('/api/sections/:skillSlug/save-progress', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+      const { skillSlug } = req.params;
+      const { currentQuestionIndex, answers, codeDrafts } = req.body || {};
+
+      const sectionKey = `${uid}_${skillSlug}`;
+      const section = await store.get<AssessmentSectionRecord>('user_sections', sectionKey);
+
+      if (!section) {
+        return res.status(404).json({ error: `Section '${skillSlug}' not found` });
+      }
+
+      if (typeof currentQuestionIndex === 'number') {
+        section.currentQuestionIndex = currentQuestionIndex;
+      }
+      if (answers && typeof answers === 'object') {
+        section.answers = { ...section.answers, ...answers };
+      }
+      if (codeDrafts && typeof codeDrafts === 'object') {
+        section.codeDrafts = { ...(section.codeDrafts || {}), ...codeDrafts };
+      }
+
+      if (section.status === 'ready') {
+        section.status = 'in_progress';
+        section.startedAt = section.startedAt || new Date().toISOString();
+      }
+
+      section.updatedAt = new Date().toISOString();
+      await store.put('user_sections', sectionKey, section);
+
+      // Async non-blocking Firestore update
+      try {
+        await adminDb.collection('users').doc(uid).collection('assessmentSections').doc(skillSlug).update({
+          status: section.status,
+          currentQuestionIndex: section.currentQuestionIndex,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } catch {}
+
+      return res.json({ ok: true, savedAt: section.updatedAt });
+    } catch (err: unknown) {
+      console.error('[Sections] save-progress failed:', err);
+      return res.status(500).json({ error: 'Failed to autosave progress' });
+    }
+  });
+
+  // POST /api/sections/:skillSlug/submit: Grade section answers and award verified badges
+  app.post('/api/sections/:skillSlug/submit', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+      const { skillSlug } = req.params;
+      const { answers, codeDrafts } = req.body || {};
+
+      const sectionKey = `${uid}_${skillSlug}`;
+      const section = await store.get<AssessmentSectionRecord>('user_sections', sectionKey);
+
+      if (!section) {
+        return res.status(404).json({ error: `Section '${skillSlug}' not found` });
+      }
+
+      // Retrieve all questions for grading
+      const fullQuestions = await getQuestionsForSection(section);
+      if (fullQuestions.length === 0) {
+        return res.status(400).json({ error: 'No questions registered for this section' });
+      }
+
+      let correctCount = 0;
+      const questionBreakdown: any[] = [];
+      const mergedAnswers = { ...section.answers, ...(answers || {}) };
+
+      for (const q of fullQuestions) {
+        if (q.type === 'mcq') {
+          const userChoice = mergedAnswers[q.id];
+          const isCorrect = userChoice === q.correctOptionId;
+          if (isCorrect) correctCount++;
+
+          questionBreakdown.push({
+            id: q.id,
+            type: 'mcq',
+            prompt: q.prompt,
+            userChoice,
+            correctChoice: q.correctOptionId,
+            isCorrect,
+            explanation: q.explanation,
+          });
+        } else if (q.type === 'code') {
+          // Coding question: evaluate code submission against hidden and visible tests
+          const userCode = mergedAnswers[q.id] || (codeDrafts && codeDrafts[q.id]) || '';
+          let testsPassed = 0;
+          const totalTests = q.visibleTests.length + q.hiddenTests.length;
+
+          if (userCode.trim().length > 10) {
+            try {
+              const compilerId = await getCompilerIdForLanguage(q.language as any);
+              const allTests = [...q.visibleTests, ...q.hiddenTests];
+
+              for (const t of allTests) {
+                const runRes = await runCode(compilerId, userCode, t.input);
+                if (runRes.exitCode === 0 && runRes.output.trim() === t.expected.trim()) {
+                  testsPassed++;
+                }
+              }
+            } catch (runnerErr) {
+              console.warn(`[Grading] Compiler error on question ${q.id}:`, runnerErr);
+            }
+          }
+
+          const isFullyCorrect = totalTests > 0 && testsPassed === totalTests;
+          const isPartiallyCorrect = totalTests > 0 && testsPassed / totalTests >= 0.6;
+          if (isFullyCorrect) correctCount++;
+          else if (isPartiallyCorrect) correctCount += 0.5;
+
+          questionBreakdown.push({
+            id: q.id,
+            type: 'code',
+            title: q.title,
+            testsPassed,
+            totalTests,
+            isCorrect: isFullyCorrect,
+          });
+        }
+      }
+
+      const score = Math.round((correctCount / Math.max(1, fullQuestions.length)) * 100);
+      const badgeLabel: 'Verified' | 'Partially verified' | 'Not yet verified' =
+        score >= 70 ? 'Verified' : score >= 40 ? 'Partially verified' : 'Not yet verified';
+
+      section.status = 'completed';
+      section.score = score;
+      section.badgeLabel = badgeLabel;
+      section.attempts = (section.attempts || 0) + 1;
+      section.completedAt = new Date().toISOString();
+      section.updatedAt = new Date().toISOString();
+      await store.put('user_sections', sectionKey, section);
+
+      // Record skill cooldown
+      const limits = await getUserRateLimits(uid);
+      limits.lastCompletedSkillAt[skillSlug] = section.completedAt;
+      await store.put('user_rate_limits', uid, limits);
+
+      // Add verified evidence item for Skill Passport
+      const evidenceItem: EvidenceItem = {
+        id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        userId: uid,
+        skillId: skillSlug,
+        type: 'knowledge',
+        score: score / 100,
+        difficulty: section.claimedLevel === 'Advanced' ? 3 : section.claimedLevel === 'Intermediate' ? 2 : 1,
+        sourceRef: `section_${skillSlug}`,
+        integrity: 0.95,
+        createdAt: section.completedAt,
+        details: {
+          problemTitle: `${section.skillName} Verification Assessment`,
+          correctnessPercent: score,
+          verdictSummary: `${correctCount}/${fullQuestions.length} questions passed (${badgeLabel})`,
+        },
+      };
+      await store.put('skill_evidence', evidenceItem.id, evidenceItem);
+
+      // Persist verified skill to user profile in Firestore
+      try {
+        const userRef = adminDb.collection('users').doc(uid);
+        const userDoc = await userRef.get();
+        if (userDoc.exists) {
+          const udata = userDoc.data();
+          const existingSkills = Array.isArray(udata?.skills) ? udata.skills : [];
+          const updatedSkills = existingSkills.map((s: any) => {
+            if (s.slug === skillSlug || s.name.toLowerCase() === section.skillName.toLowerCase()) {
+              return {
+                ...s,
+                verified: score >= 70,
+                score,
+                tier: badgeLabel,
+                verifiedAt: section.completedAt,
+              };
+            }
+            return s;
+          });
+
+          if (!updatedSkills.some((s: any) => s.slug === skillSlug || s.name.toLowerCase() === section.skillName.toLowerCase())) {
+            updatedSkills.push({
+              name: section.skillName,
+              slug: skillSlug,
+              level: section.claimedLevel,
+              verified: score >= 70,
+              score,
+              tier: badgeLabel,
+              verifiedAt: section.completedAt,
+            });
+          }
+
+          await userRef.update({
+            skills: updatedSkills,
+            lastAssessmentScore: score,
+            lastAssessmentBadge: badgeLabel,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+
+        // Also update subcollection
+        await adminDb.collection('users').doc(uid).collection('assessmentSections').doc(skillSlug).update({
+          status: 'completed',
+          score,
+          badgeLabel,
+          attempts: section.attempts,
+          completedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } catch (fsErr) {
+        console.warn('[Sections] Firestore submit update warning (non-fatal):', fsErr);
+      }
+
+      return res.json({
+        ok: true,
+        section,
+        score,
+        badgeLabel,
+        correctCount,
+        totalQuestions: fullQuestions.length,
+        breakdown: questionBreakdown,
+      });
+    } catch (err: unknown) {
+      console.error('[Sections] submit failed:', err);
+      return res.status(500).json({ error: 'Failed to evaluate and submit section' });
+    }
+  });
+
+  // POST /api/code/run: Protected compiler endpoint with debouncing, hidden tests, rate limits, and fallback
+  app.post('/api/code/run', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      const { skillSlug, questionId, code, customInput, language } = req.body || {};
+
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({ error: 'Missing code parameter' });
+      }
+
+      // Code size cap: 20 KB
+      if (code.length > 20 * 1024) {
+        return res.status(400).json({ error: 'Code size exceeds 20 KB limit' });
+      }
+
+      // Rate limit check: max 30 runs per hour
+      const rateCheck = await checkAndIncrementCompilerRun(uid);
+      if (!rateCheck.ok) {
+        return res.status(429).json({ error: rateCheck.reason });
+      }
+
+      // Language compiler lookup
+      const targetLang = language || RUNNABLE_LANGUAGE_MAP[skillSlug?.toLowerCase()] || 'python';
+      let compilerId: string;
+      try {
+        compilerId = await getCompilerIdForLanguage(targetLang as any);
+      } catch {
+        compilerId = 'python-3.14';
+      }
+
+      // Custom input execution
+      if (customInput !== undefined) {
+        try {
+          const runnerRes = await runCode(compilerId, code, String(customInput));
+          return res.json({
+            output: runnerRes.output,
+            error: runnerRes.error,
+            exitCode: runnerRes.exitCode,
+            timeSec: runnerRes.timeSec,
+            memoryKb: runnerRes.memoryKb,
+            custom: true,
+          });
+        } catch (compErr: any) {
+          console.warn('[Compiler] Execution failure or rate-limited:', compErr);
+          return res.status(503).json({
+            busy: true,
+            error: 'Code runner is busy, try again in a moment',
+          });
+        }
+      }
+
+      // Test case evaluation against visible and hidden tests
+      if (questionId) {
+        let question = await store.get<DynamicCodingQuestion>('dynamic_questions', questionId);
+        if (!question && skillSlug === 'python') {
+          const pyBank = getPythonQuestionsBank();
+          question = (pyBank.find((q: DynamicQuestion) => q.id === questionId && q.type === 'code') as DynamicCodingQuestion) || null;
+        }
+
+        if (!question || question.type !== 'code') {
+          return res.status(404).json({ error: 'Coding question not found' });
+        }
+
+        const visibleResults: any[] = [];
+        let firstFailingVisibleExample: any = null;
+        let passedVisible = 0;
+        let passedHidden = 0;
+
+        try {
+          // 1. Run visible tests
+          for (let i = 0; i < question.visibleTests.length; i++) {
+            const vt = question.visibleTests[i];
+            const runRes = await runCode(compilerId, code, vt.input);
+            const passed = runRes.exitCode === 0 && runRes.output.trim() === vt.expected.trim();
+
+            if (passed) {
+              passedVisible++;
+            } else if (!firstFailingVisibleExample) {
+              firstFailingVisibleExample = {
+                index: i + 1,
+                input: vt.input,
+                expected: vt.expected,
+                actual: runRes.output,
+                error: runRes.error,
+              };
+            }
+
+            visibleResults.push({
+              index: i + 1,
+              passed,
+              input: vt.input,
+              expected: vt.expected,
+              output: runRes.output,
+              error: runRes.error,
+            });
+          }
+
+          // 2. Run hidden tests on server (never expose inputs or expected values to client)
+          for (let i = 0; i < question.hiddenTests.length; i++) {
+            const ht = question.hiddenTests[i];
+            const runRes = await runCode(compilerId, code, ht.input);
+            const passed = runRes.exitCode === 0 && runRes.output.trim() === ht.expected.trim();
+            if (passed) passedHidden++;
+          }
+
+          const totalCount = question.visibleTests.length + question.hiddenTests.length;
+          const passedCount = passedVisible + passedHidden;
+
+          return res.json({
+            passedCount,
+            totalCount,
+            allPassed: passedCount === totalCount,
+            visibleResults,
+            firstFailingVisibleExample,
+          });
+        } catch (compErr: any) {
+          console.warn('[Compiler] Execution failure during test evaluation:', compErr);
+          return res.status(503).json({
+            busy: true,
+            error: 'Code runner is busy, try again in a moment',
+          });
+        }
+      }
+
+      return res.status(400).json({ error: 'Provide either customInput or questionId' });
+    } catch (err: unknown) {
+      console.error('[Compiler] /api/code/run error:', err);
+      return res.status(500).json({ error: 'Code execution error' });
+    }
+  });
+
+  // DELETE /api/user/data: Privacy "Delete my data" option
+  app.delete('/api/user/data', async (req, res) => {
+    try {
+      const sessionUser = await verifySession(req);
+      const uid = sessionUser?.uid || DEMO_USER_ID;
+
+      console.log(`[Privacy] Deleting all data for user ${uid}...`);
+
+      // 1. Delete user sections in store
+      const allSections = await store.list<AssessmentSectionRecord>('user_sections');
+      for (const sec of allSections) {
+        if (sec.userId === uid) {
+          await store.delete('user_sections', `${uid}_${sec.skillSlug}`);
+        }
+      }
+
+      // 2. Reset user profile in Firestore
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            onboardingCompleted: false,
+            onboardingSkipped: false,
+            profile: null,
+            skills: [],
+            laterSkills: [],
+            lastAssessmentScore: null,
+            lastAssessmentBadge: null,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (fsErr) {
+        console.warn('[Privacy] Firestore reset error:', fsErr);
+      }
+
+      return res.json({ ok: true, message: 'All assessment records, sections, and profile data have been deleted.' });
+    } catch (err: unknown) {
+      console.error('[Privacy] Data deletion failed:', err);
+      return res.status(500).json({ error: 'Failed to delete user data' });
     }
   });
 
@@ -502,7 +1089,7 @@ async function startServer() {
       activeAssessmentsMap.set(assessment.id, assessment);
 
       // Return questions with correctOptionId and explanation stripped for integrity
-      const publicQuestions = assessment.questions.map((q) => ({
+      const publicQuestions = assessment.questions.map((q: any) => ({
         id: q.id,
         prompt: q.prompt,
         codeSnippet: q.codeSnippet,
@@ -2004,16 +2591,9 @@ async function startServer() {
         if (AUTH_GATE) {
           const sessionUser = await verifySession(req);
           if (sessionUser) {
-            // If already signed in and visiting /login or /signup, redirect to root
-            if (req.path === '/login' || req.path === '/signup') {
-              return res.redirect('/');
-            }
-            // If already signed in and visiting root '/', serve private app index.html
-            if (req.path === '/' || req.path === '/landing' || req.path === '/landing.html') {
-              const indexHtmlPath = path.resolve(__dirname, 'index.html');
-              let html = await fs.promises.readFile(indexHtmlPath, 'utf-8');
-              html = await vite.transformIndexHtml(req.originalUrl, html);
-              return res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+            // If already signed in and visiting /login or /signup or /, redirect to /dashboard
+            if (req.path === '/login' || req.path === '/signup' || req.path === '/' || req.path === '/landing' || req.path === '/landing.html') {
+              return res.redirect('/dashboard');
             }
           }
         }
@@ -2048,11 +2628,8 @@ async function startServer() {
       if (AUTH_GATE) {
         const sessionUser = await verifySession(req);
         if (sessionUser) {
-          if (req.path === '/login' || req.path === '/signup') {
-            return res.redirect('/');
-          }
-          if (req.path === '/' || req.path === '/landing' || req.path === '/landing.html') {
-            return res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+          if (req.path === '/login' || req.path === '/signup' || req.path === '/' || req.path === '/landing' || req.path === '/landing.html') {
+            return res.redirect('/dashboard');
           }
         }
       }

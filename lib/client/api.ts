@@ -257,6 +257,56 @@ export const clientApi = {
     return fetchJson<PassportProfile>(`/api/passport/${slug}`);
   },
 
+  // Dynamic Personalized Assessment Sections
+  getUserSections: async (): Promise<{ sections: any[]; laterSkills?: any[] }> => {
+    return fetchJson<{ sections: any[]; laterSkills?: any[] }>('/api/sections');
+  },
+
+  openUserSection: async (skillSlug: string): Promise<{ section: any; questions?: any[] }> => {
+    return fetchJson<{ section: any; questions?: any[] }>(`/api/sections/${skillSlug}/open`, {
+      method: 'POST',
+    });
+  },
+
+  saveSectionProgress: async (
+    skillSlug: string,
+    payload: { currentQuestionIndex: number; answers: Record<string, string>; codeDrafts?: Record<string, string> }
+  ): Promise<{ ok: boolean }> => {
+    return fetchJson<{ ok: boolean }>(`/api/sections/${skillSlug}/save-progress`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  submitSection: async (
+    skillSlug: string,
+    payload: { answers: Record<string, string>; codeDrafts?: Record<string, string> }
+  ): Promise<any> => {
+    return fetchJson<any>(`/api/sections/${skillSlug}/submit`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  runDynamicCode: async (payload: {
+    skillSlug: string;
+    questionId?: string;
+    code: string;
+    customInput?: string;
+    language?: string;
+  }): Promise<any> => {
+    return fetchJson<any>('/api/code/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteUserData: async (): Promise<{ ok: boolean; message: string }> => {
+    return fetchJson<{ ok: boolean; message: string }>('/api/user/data', {
+      method: 'DELETE',
+    });
+  },
+
   getCandidates: async (): Promise<{
     candidates: CandidateRanking[];
     isDemoData: boolean;

@@ -5,7 +5,7 @@ import { SiteNav } from '@bl/components/landing/site-nav';
 import { Link } from '@bl/lib/link';
 import { buttonClass } from '@bl/lib/ui';
 import { sendPasswordReset } from '../../firebase';
-import { formatAuthError, FormattedAuthError } from '../lib/auth-errors';
+import { formatAuthError, FormattedAuthError, AuthErrorAlert } from '../lib/auth-errors';
 
 export function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -64,20 +64,7 @@ export function ForgotPasswordPage() {
             </div>
           )}
 
-          {error && (
-            <div
-              role="alert"
-              className="mt-6 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-700 leading-relaxed"
-            >
-              <div className="font-semibold text-red-800 mb-0.5">Reset Error</div>
-              <p>{error.message}</p>
-              {error.code && (
-                <div className="mt-1.5 font-mono text-[11px] text-red-800/80 bg-red-100/60 px-2 py-0.5 rounded inline-block">
-                  Code: {error.code}
-                </div>
-              )}
-            </div>
-          )}
+          <AuthErrorAlert error={error} />
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div>

@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Logomark } from '@bl/components/brand/logo';
 import { SiteFooter } from '@bl/components/landing/site-footer';
 import { SiteNav } from '@bl/components/landing/site-nav';
 import { Link } from '@bl/lib/link';
 import { buttonClass } from '@bl/lib/ui';
-import { signInWithGoogle, signInWithEmail } from '../../firebase';
-import { formatAuthError, FormattedAuthError } from '../lib/auth-errors';
+import { signInWithGoogle, signInWithEmail, checkRedirectResult } from '../../firebase';
+import { formatAuthError, FormattedAuthError, AuthErrorAlert } from '../lib/auth-errors';
 
 export function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -14,12 +14,32 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<FormattedAuthError | null>(null);
 
+  // Check for returning redirect result from Google OAuth fallback
+  useEffect(() => {
+    let mounted = true;
+    checkRedirectResult()
+      .then((user) => {
+        if (user && mounted) {
+          window.location.assign('/dashboard');
+        }
+      })
+      .catch((err: unknown) => {
+        if (mounted) {
+          console.error('[Login] Google redirect completion error:', err);
+          setError(formatAuthError(err, 'Failed to complete Google sign-in.'));
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const handleGoogleSignIn = async () => {
     try {
       setGoogleLoading(true);
       setError(null);
       await signInWithGoogle();
-      window.location.assign('/');
+      window.location.assign('/dashboard');
     } catch (err: unknown) {
       console.error('Sign-in error:', err);
       setError(formatAuthError(err, 'An unexpected error occurred during Google sign-in.'));
@@ -53,7 +73,7 @@ export function LoginPage() {
     try {
       setEmailLoading(true);
       await signInWithEmail(trimmedEmail, password);
-      window.location.assign('/');
+      window.location.assign('/dashboard');
     } catch (err: unknown) {
       console.error('Email login error:', err);
       setError(formatAuthError(err, 'Failed to sign in. Please check your credentials.'));
@@ -78,20 +98,7 @@ export function LoginPage() {
             </p>
           </div>
 
-          {error && (
-            <div
-              role="alert"
-              className="mt-6 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-700 leading-relaxed"
-            >
-              <div className="font-semibold text-red-800 mb-0.5">Authentication Error</div>
-              <p>{error.message}</p>
-              {error.code && (
-                <div className="mt-1.5 font-mono text-[11px] text-red-800/80 bg-red-100/60 px-2 py-0.5 rounded inline-block">
-                  Code: {error.code}
-                </div>
-              )}
-            </div>
-          )}
+          <AuthErrorAlert error={error} />
 
           <div className="mt-6 space-y-4">
             <button

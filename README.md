@@ -4,9 +4,9 @@
 
 SkillProof helps candidates back up what they claim on a resume. Instead of listing "Java" or "Python" with no evidence, a candidate takes a 25-question assessment that mixes multiple-choice questions with hands-on coding problems, gets a score out of 100, and builds a verifiable **Skill Passport** from the results.
 
-> *Proof over pedigree.*
+> _Proof over pedigree._
 
-<!-- Add a screenshot here: ![SkillProof](docs/screenshot.png) -->
+![SkillProof landing page](docs/screenshots/landing.png)
 
 **Live demo:** https://skillproof-635348133582.asia-southeast1.run.app
 
@@ -22,6 +22,26 @@ SkillProof helps candidates back up what they claim on a resume. Instead of list
 - **Authentication:** sign in with Google or with email and password (Firebase Authentication).
 - **Public landing site** plus a protected private app, with an authentication gate on private routes.
 
+## Screenshots
+
+### Dashboard
+
+Four fixed skill assessments, each with 25 questions, plus a profile panel, badge and reminders.
+
+![SkillProof dashboard](docs/screenshots/dashboard.png)
+
+### Multiple-choice questions
+
+A question navigator grouped by difficulty, a countdown timer, autosave and a flag option for review.
+
+![Multiple-choice question](docs/screenshots/assessment-mcq.png)
+
+### Coding problems
+
+A problem statement with input and output formats on the left, and the Monaco editor with Run Visible Tests and Submit on the right.
+
+![Coding problem with in-browser editor](docs/screenshots/assessment-coding.png)
+
 ## How scoring works
 
 Each question is weighted by difficulty: Easy = 1, Medium = 2, Hard = 3, for a maximum of 49 points per assessment. A multiple-choice answer earns its full weight when correct. A coding problem earns its weight multiplied by the share of test cases it passes.
@@ -30,28 +50,28 @@ $$
 \text{Score} = \operatorname{round}\left(\frac{\text{points earned}}{49} \times 100\right)
 $$
 
-| Score | Level |
-|---|---|
-| 85 to 100 | Expert |
-| 70 to 84 | Proficient |
-| 50 to 69 | Developing |
-| Below 50 | Beginner |
+| Score     | Level      |
+| --------- | ---------- |
+| 85 to 100 | Expert     |
+| 70 to 84  | Proficient |
+| 50 to 69  | Developing |
+| Below 50  | Beginner   |
 
 Scores are calculated on the server. Correct answers, hidden test cases and reference solutions are kept on the server and are not sent to the browser.
 
 ## Tech stack
 
-| Area | Technology |
-|---|---|
-| Server | Node.js, Express, TypeScript |
-| Frontend | HTML, CSS and JavaScript built with Vite |
+| Area           | Technology                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| Server         | Node.js, Express, TypeScript                                                              |
+| Frontend       | HTML, CSS and JavaScript built with Vite                                                  |
 | Authentication | Firebase Authentication (Google and email/password) with signed, httpOnly session cookies |
-| Database | Cloud Firestore with default-deny security rules |
-| Code editor | Monaco Editor |
-| Code execution | onlinecompiler.io API |
-| AI (optional) | Google Gemini API |
-| Hosting | Google Cloud Run |
-| Prototyped in | Google AI Studio |
+| Database       | Cloud Firestore with default-deny security rules                                          |
+| Code editor    | Monaco Editor                                                                             |
+| Code execution | onlinecompiler.io API                                                                     |
+| AI (optional)  | Google Gemini API                                                                         |
+| Hosting        | Google Cloud Run                                                                          |
+| Prototyped in  | Google AI Studio                                                                          |
 
 ## Getting started
 
@@ -88,16 +108,16 @@ GEMINI_API_KEY=<optional>
 NODE_ENV=development
 ```
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `SESSION_SECRET` | Yes, for sign-in | Signs and verifies session cookies |
-| `FIREBASE_PROJECT_ID` | Recommended | Firebase project identifier (falls back to the config file) |
-| `ONLINECOMPILER_API_KEY` | For coding questions | External code execution engine |
-| `GEMINI_API_KEY` | Optional | Enables Gemini-powered features |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | Path to a service account file for server-side Firebase access |
-| `AUTH_GATE` | Optional (default on) | Set to `false` to switch off the authentication gate |
-| `NODE_ENV` | Recommended | `production` serves the built files from `dist/` |
-| `PORT` | Optional (default 3000) | Port to listen on; Cloud Run sets this automatically |
+| Variable                         | Required                | Purpose                                                        |
+| -------------------------------- | ----------------------- | -------------------------------------------------------------- |
+| `SESSION_SECRET`                 | Yes, for sign-in        | Signs and verifies session cookies                             |
+| `FIREBASE_PROJECT_ID`            | Recommended             | Firebase project identifier (falls back to the config file)    |
+| `ONLINECOMPILER_API_KEY`         | For coding questions    | External code execution engine                                 |
+| `GEMINI_API_KEY`                 | Optional                | Enables Gemini-powered features                                |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional                | Path to a service account file for server-side Firebase access |
+| `AUTH_GATE`                      | Optional (default on)   | Set to `false` to switch off the authentication gate           |
+| `NODE_ENV`                       | Recommended             | `production` serves the built files from `dist/`               |
+| `PORT`                           | Optional (default 3000) | Port to listen on; Cloud Run sets this automatically           |
 
 Generate a session secret with:
 
